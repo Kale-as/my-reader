@@ -1,0 +1,4471 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>在线阅读器 - PDF / EPUB 中英对照</title>
+    <meta
+      name="description"
+      content="纯前端在线阅读器：导入 PDF / EPUB 直接在浏览器里读，支持中英对照、划词翻译、生词本、高亮，扫描版 PDF 自带 OCR。文件只存在本地浏览器，不上传服务器。"
+    />
+    <meta name="theme-color" content="#3b6ef6" />
+    <meta name="color-scheme" content="light dark" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="在线阅读器 - PDF / EPUB 中英对照" />
+    <meta
+      property="og:description"
+      content="导入 PDF / EPUB 直接在浏览器里读：中英对照、划词翻译、生词本，扫描版 PDF 自带 OCR。文件不上传。"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%233b6ef6'/%3E%3Cpath d='M16 17h12a7 7 0 0 1 7 7v25a6 6 0 0 0-6-6H16z' fill='%23fff'/%3E%3Cpath d='M48 17H36a7 7 0 0 0-7 7v25a6 6 0 0 1 6-6h13z' fill='%23fff' opacity='.65'/%3E%3C/svg%3E"
+    />
+
+    <!--
+      单文件阅读器：不需要 npm，不需要构建，双击即可打开。
+
+        1. 导入 PDF / EPUB（存在浏览器本地 IndexedDB，不上传）
+        2. 读英文原文，中文对照（可开关、可悬停、可只看原文）
+        3. 划词翻译、生词本、高亮、进度记忆、主题与字号
+
+      依赖走 CDN：pdf.js 4.10.38（ESM）、epub.js 0.3.93（UMD）。
+      翻译引擎可切换：MyMemory（免费免密钥）/ OpenAI 兼容接口（自填 Key，含 Ollama 本地）。
+    -->
+    <style>
+      :root {
+        --bg: #f5f6f8;
+        --panel: #fff;
+        --fg: #1b1d22;
+        --muted: #6b7280;
+        --border: #e3e6ec;
+        --accent: #3b6ef6;
+        --accent-soft: #eaf0ff;
+        --zh: #2f4f8f;
+        --zh-bg: #f2f6ff;
+        --shadow: 0 8px 28px rgba(20, 24, 40, 0.1);
+      }
+      html[data-theme='sepia'] {
+        --bg: #efe4d0; --panel: #f8f1e3; --fg: #3b3226; --muted: #8a7a63;
+        --border: #ddd0b8; --accent: #9a6b2f; --accent-soft: #f3e6cf;
+        --zh: #7a5220; --zh-bg: #f6ecd8;
+      }
+      html[data-theme='dark'] {
+        --bg: #14161b; --panel: #1b1e25; --fg: #e7e9ee; --muted: #9aa1b1;
+        --border: #2b303b; --accent: #7aa2ff; --accent-soft: #232a3d;
+        --zh: #9fc0ff; --zh-bg: #1d2430; --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg); color: var(--fg);
+        font: 15px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+          'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      .view { height: 100%; display: flex; flex-direction: column; }
+      [hidden] { display: none !important; }
+      .spacer { flex: 1; }
+
+      .btn {
+        appearance: none; border: 1px solid var(--border); background: var(--panel); color: var(--fg);
+        border-radius: 10px; padding: 8px 13px; font: inherit; font-size: 14px; cursor: pointer;
+        white-space: nowrap; transition: background 0.15s, border-color 0.15s, transform 0.05s;
+      }
+      .btn:hover { background: var(--accent-soft); border-color: var(--accent); }
+      .btn:active { transform: translateY(1px); }
+      .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      .btn.primary:hover { filter: brightness(1.06); }
+      .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+      .btn.ghost:hover { background: var(--accent-soft); color: var(--fg); border-color: transparent; }
+      .btn.small { padding: 6px 10px; font-size: 13px; border-radius: 8px; }
+      .btn[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+      /* ================= 书架 ================= */
+      .lib-head { display: flex; align-items: center; gap: 12px; padding: 26px 28px 10px; }
+      .lib-head h1 { margin: 0; font-size: 20px; }
+      .tag { font-size: 11px; padding: 2px 7px; border-radius: 20px; background: var(--accent-soft); color: var(--accent); }
+      .hint { margin: 0 28px 18px; color: var(--muted); font-size: 13px; }
+      .grid {
+        flex: 1; overflow: auto; padding: 4px 28px 28px;
+        display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+        gap: 16px; align-content: start;
+      }
+      .card {
+        position: relative; background: var(--panel); border: 1px solid var(--border);
+        border-radius: 14px; padding: 16px; cursor: pointer; min-height: 168px;
+        display: flex; flex-direction: column; gap: 8px;
+        transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s;
+      }
+      .card:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: var(--accent); }
+      .badge {
+        align-self: flex-start; font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
+        padding: 3px 8px; border-radius: 6px; background: var(--accent-soft); color: var(--accent);
+      }
+      .badge.epub { background: #e8f7ee; color: #1f8a4c; }
+      html[data-theme='dark'] .badge.epub { background: #16301f; color: #6ddc9b; }
+      .card h3 { margin: 0; font-size: 15px; line-height: 1.4; word-break: break-word; }
+      .card .meta { margin-top: auto; color: var(--muted); font-size: 12.5px; }
+      .bar { height: 4px; border-radius: 3px; background: var(--border); overflow: hidden; }
+      .bar > i { display: block; height: 100%; background: var(--accent); }
+      .card .del {
+        position: absolute; top: 10px; right: 10px; opacity: 0; border: 1px solid var(--border);
+        background: var(--panel); color: var(--muted); border-radius: 8px; width: 26px; height: 26px; cursor: pointer;
+      }
+      .card:hover .del { opacity: 1; }
+      .empty {
+        grid-column: 1 / -1; text-align: center; color: var(--muted);
+        border: 1.5px dashed var(--border); border-radius: 16px; padding: 64px 20px;
+      }
+      .notice {
+        margin: 0 28px 16px; padding: 14px 16px; border-radius: 12px;
+        border: 1px solid #e5484d; background: #fdecec; color: #7d1f22; font-size: 13.5px;
+      }
+      html[data-theme='dark'] .notice { background: #2a1618; color: #ffb4b6; }
+      .notice .notice-title { font-weight: 700; margin-bottom: 6px; }
+      .notice .notice-body { line-height: 1.7; }
+      .notice details { margin-top: 10px; }
+      .notice summary { cursor: pointer; }
+      .notice pre {
+        margin: 8px 0 0; padding: 10px; max-height: 220px; overflow: auto; font-size: 12px;
+        background: var(--panel); color: var(--fg); border-radius: 8px; white-space: pre-wrap;
+      }
+      .notice .btn { margin-top: 10px; }
+      #drop {
+        position: fixed; inset: 0; background: rgba(59, 110, 246, 0.12); z-index: 50;
+        display: flex; align-items: center; justify-content: center; font-size: 20px; color: var(--accent);
+      }
+
+      /* ================= 阅读器 ================= */
+      .topbar {
+        display: flex; align-items: center; gap: 5px; padding: 9px 14px; flex-wrap: wrap;
+        background: var(--panel); border-bottom: 1px solid var(--border);
+      }
+      .topbar .title {
+        font-size: 14px; font-weight: 600; max-width: 300px; margin-left: 6px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .topbar .pct { color: var(--muted); font-size: 13px; min-width: 44px; text-align: center; }
+      .page-input {
+        width: 56px; padding: 5px 6px; text-align: center; font: inherit; font-size: 13.5px;
+        color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      }
+      .page-input:focus { outline: none; border-color: var(--accent); }
+      .page-total { color: var(--muted); font-size: 13px; margin-right: 6px; }
+      .vr { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+      .reader-body { flex: 1; display: flex; min-height: 0; }
+      .stage { flex: 1; min-width: 0; position: relative; background: var(--reader-bg, transparent); }
+      .side {
+        width: var(--side-w, 340px); flex: none; border-right: 1px solid var(--border);
+        background: var(--panel); display: flex; flex-direction: column; min-height: 0;
+      }
+      .splitter { flex: none; width: 7px; cursor: col-resize; background: transparent; position: relative; }
+      .splitter::after {
+        content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 1px; background: var(--border);
+      }
+      .splitter:hover, .splitter.dragging { background: var(--accent-soft); }
+      .splitter:hover::after, .splitter.dragging::after { left: 2px; width: 2px; background: var(--accent); }
+      .tabs { display: flex; border-bottom: 1px solid var(--border); }
+      .tabs button {
+        flex: 1; padding: 11px 4px; background: none; border: none; border-bottom: 2px solid transparent;
+        font: inherit; font-size: 13px; color: var(--muted); cursor: pointer;
+      }
+      .tabs button[aria-selected='true'] { color: var(--accent); border-bottom-color: var(--accent); }
+      .side-list { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+      .side-list .none { color: var(--muted); font-size: 13px; padding: 10px 4px; }
+
+      /* OCR 卡片（扫描版 PDF） */
+      .ocr-card {
+        border: 1px solid var(--accent); border-radius: 12px; padding: 12px 14px;
+        background: var(--accent-soft);
+      }
+      .ocr-card .ocr-title { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+      .ocr-card .ocr-body { color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+      .ocr-card .ocr-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; }
+      .ocr-card select {
+        flex: 1; padding: 6px 8px; font: inherit; font-size: 13px; color: var(--fg);
+        background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      }
+      .ocr-card .ocr-acts { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+      .ocr-card .ocr-progress { margin-top: 10px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+
+      /* 对照条目：英文在上，中文在下 */
+      .bi {
+        border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .bi:hover, .bi.active { border-color: var(--accent); background: var(--accent-soft); }
+      .bi .en { font-size: 13px; color: var(--muted); line-height: 1.5; }
+      .bi .zh {
+        margin-top: 6px; font-size: 14px; color: var(--zh); line-height: 1.7;
+        border-left: 3px solid var(--accent); padding-left: 9px;
+      }
+      .bi .zh.loading { color: var(--muted); font-style: italic; border-left-color: var(--border); }
+      .bi .zh.err { color: #e5484d; border-left-color: #e5484d; }
+      .bi .zh.err span { font-size: 12.5px; }
+
+      .item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+      .item:hover { border-color: var(--accent); }
+      .item .row { display: flex; align-items: baseline; gap: 8px; }
+      .item .w { font-weight: 600; font-size: 14px; }
+      .item .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+      .item .ctx { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+      .item .ctx mark, .popover .ctx mark { background: rgba(255, 214, 102, 0.55); color: inherit; border-radius: 3px; }
+      .item .rm { margin-left: auto; border: none; background: none; color: var(--muted); cursor: pointer; font-size: 13px; }
+      .item .rm:hover { color: #e5484d; }
+      .toc-item { padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 13.5px; }
+      .toc-item:hover { background: var(--accent-soft); }
+
+      .loading-box, .error-box {
+        position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px;
+        align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 24px;
+      }
+      .error-box strong { color: #e5484d; }
+
+      /* PDF */
+      .pdf-host {
+        position: absolute; inset: 0; overflow: auto; padding: 20px 16px 60px;
+        display: flex; flex-direction: column; align-items: center; gap: 18px;
+      }
+      .pdf-page {
+        position: relative; background: #fff; flex: none; border-radius: 3px; overflow: hidden;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.13);
+      }
+      .pdf-canvas { display: block; }
+      .text-layer { position: absolute; inset: 0; overflow: hidden; line-height: 1; }
+      .text-layer span, .text-layer br {
+        position: absolute; white-space: pre; color: transparent; transform-origin: 0% 0%; cursor: text;
+      }
+      .text-layer span::selection { background: var(--sel, rgba(72, 128, 255, 0.35)); }
+      .hl-layer { position: absolute; inset: 0; pointer-events: none; }
+      .hl-rect { position: absolute; background: rgba(255, 214, 102, 0.5); mix-blend-mode: multiply; border-radius: 2px; }
+      .hl-flash {
+        position: absolute; background: rgba(59, 110, 246, 0.18);
+        outline: 1.5px solid var(--accent); border-radius: 3px; transition: opacity 0.4s;
+      }
+      .para-layer { position: absolute; inset: 0; pointer-events: none; }
+      .para-hit { position: absolute; pointer-events: auto; cursor: help; }
+      .para-hit:hover { background: rgba(59, 110, 246, 0.07); }
+
+      /* EPUB */
+      .epub-host { position: absolute; inset: 0; }
+      .epub-host iframe { border: 0; }
+
+      /*
+       * 内容区不显示独立滚动条：滚动能力照旧（epub.js 的滚动容器是它的驱动，
+       * 拿掉会导致进度追踪失效、也不再多章加载），但视觉上就是页面在滚，不是一个内嵌小框。
+       * 当前位置由顶部的页码 / 百分比显示。
+       */
+      .epub-container,
+      .pdf-host {
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+      .epub-container::-webkit-scrollbar,
+      .pdf-host::-webkit-scrollbar {
+        width: 0;
+        height: 0;
+      }
+
+      /* 悬停译文气泡（PDF 用） */
+      .bubble {
+        position: fixed; z-index: 70; max-width: 420px; background: var(--panel);
+        border: 1px solid var(--accent); border-radius: 12px; box-shadow: var(--shadow);
+        padding: 10px 13px; font-size: 14px; line-height: 1.7; color: var(--zh); pointer-events: none;
+      }
+      .bubble .en { display: block; color: var(--muted); font-size: 12.5px; margin-bottom: 5px; max-height: 60px; overflow: hidden; }
+
+      /* 划词气泡 */
+      .popover {
+        position: fixed; z-index: 80; width: 320px; background: var(--panel);
+        border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 12px 14px;
+      }
+      .popover .word { font-size: 16px; font-weight: 700; }
+      .popover .src { margin-top: 6px; color: var(--muted); font-size: 12.5px; max-height: 80px; overflow: auto; }
+      .popover .src mark { background: rgba(255, 214, 102, 0.6); color: inherit; border-radius: 3px; }
+      .popover .zh {
+        margin-top: 8px; padding-left: 9px; border-left: 3px solid var(--accent);
+        color: var(--zh); font-size: 14px; line-height: 1.7; max-height: 130px; overflow: auto;
+      }
+      .popover .acts { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+      .popover .hl-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+      .popover .hl-row .sw { width: 20px; height: 20px; }
+
+      /* 外观面板 */
+      .look {
+        position: fixed; top: 54px; right: 14px; z-index: 78; width: 336px;
+        background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+        box-shadow: var(--shadow); padding: 12px 14px;
+        display: flex; flex-direction: column; gap: 9px;
+      }
+      .look-row { display: flex; align-items: center; gap: 8px; }
+      .look-label { width: 34px; color: var(--muted); font-size: 13px; flex: none; }
+      .look-val { min-width: 56px; text-align: center; font-size: 13px; }
+      .look-hint { color: var(--muted); font-size: 12px; }
+      .sw {
+        width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border);
+        cursor: pointer; display: inline-block; flex: none;
+      }
+      .sw[aria-pressed='true'] { outline: 2px solid var(--accent); outline-offset: 1px; }
+      .sw-theme {
+        background: repeating-conic-gradient(#000 0 25%, #fff 0 50%) 50% / 8px 8px;
+        border-style: dashed;
+      }
+      .look input[type='color'] {
+        width: 30px; height: 22px; padding: 0; border: 1px solid var(--border);
+        border-radius: 6px; background: none; cursor: pointer;
+      }
+      .hud {
+        position: fixed; left: 50%; top: 68px; transform: translateX(-50%);
+        background: rgba(20, 22, 28, 0.86); color: #fff; padding: 8px 16px;
+        border-radius: 10px; font-size: 13px; z-index: 85; pointer-events: none;
+      }
+
+      /* 设置弹窗 */
+      .modal { position: fixed; inset: 0; background: rgba(10, 12, 20, 0.45); z-index: 90; display: flex; align-items: center; justify-content: center; }
+      .modal-card {
+        width: min(560px, 92vw); max-height: 88vh; overflow: auto; background: var(--panel);
+        border-radius: 16px; padding: 22px 24px; box-shadow: var(--shadow);
+      }
+      .modal-card h2 { margin: 0 0 4px; font-size: 17px; }
+      .modal-card label { display: block; margin: 14px 0 0; font-size: 13.5px; color: var(--muted); }
+      .modal-card input, .modal-card select {
+        width: 100%; margin-top: 5px; padding: 9px 11px; font: inherit; font-size: 14px;
+        background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 9px;
+      }
+      .modal-card .acts { display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end; }
+      .modal-card .note { margin: 14px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+      .modal-card .note code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+
+      .toast {
+        position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+        background: #1b1d22; color: #fff; padding: 10px 18px; border-radius: 10px;
+        font-size: 13.5px; z-index: 95; box-shadow: var(--shadow);
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ==================== 书架 ==================== -->
+    <section id="library" class="view">
+      <header class="lib-head">
+        <h1>在线阅读器 <span class="tag">v1</span></h1>
+        <div class="spacer"></div>
+        <button class="btn" id="btn-settings">翻译设置</button>
+        <label class="btn primary">
+          导入 PDF / EPUB
+          <input id="file-input" type="file" accept=".pdf,.epub,application/pdf,application/epub+zip" multiple hidden />
+        </label>
+      </header>
+      <p class="hint">
+        文件只保存在这台机器的浏览器里（IndexedDB），不会上传。点封面继续上次的位置；中英对照的开关在阅读器顶部。
+      </p>
+      <div id="dep-status" class="notice" hidden></div>
+      <div id="book-grid" class="grid"></div>
+    </section>
+
+    <!-- ==================== 阅读器 ==================== -->
+    <section id="reader" class="view" hidden>
+      <header class="topbar">
+        <button class="btn ghost" id="btn-back">← 书架</button>
+        <span class="title" id="reader-title"></span>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="btn-prev" title="上一页">‹</button>
+        <input class="page-input" id="page-input" type="text" inputmode="numeric" value="1" title="输入页码后回车跳转" />
+        <span class="page-total" id="page-total">/ --</span>
+        <span class="pct" id="pct">0%</span>
+        <button class="btn ghost" id="btn-next" title="下一页">›</button>
+        <span class="vr"></span>
+        <button class="btn small" id="btn-bi" aria-pressed="false" title="切换中英对照">对照：关</button>
+        <button class="btn small" id="btn-panel" aria-pressed="false">侧栏</button>
+        <button class="btn small" id="btn-look" aria-pressed="false" title="字号 / 行距 / 栏宽 / 主题 / 背景 / 选区 / 高亮 / 翻页 / 划选">设置</button>
+        <button class="btn small ghost" id="btn-cfg" title="切换翻译服务 / 填 API Key">翻译设置</button>
+      </header>
+
+      <!-- 外观面板 -->
+      <div class="look" id="look" hidden>
+        <div class="look-row">
+          <span class="look-label">字号</span>
+          <button class="btn small" id="btn-font-down">A−</button>
+          <span class="look-val" id="look-font">100%</span>
+          <button class="btn small" id="btn-font-up">A+</button>
+        </div>
+        <div class="look-row">
+          <span class="look-label">行距</span>
+          <button class="btn small" id="btn-line-down">−</button>
+          <span class="look-val" id="look-line">1.9</span>
+          <button class="btn small" id="btn-line-up">＋</button>
+        </div>
+        <div class="look-row" id="look-width-row">
+          <span class="look-label">栏宽</span>
+          <button class="btn small" id="btn-width-down">窄</button>
+          <span class="look-val" id="look-width">自动</span>
+          <button class="btn small" id="btn-width-up">宽</button>
+        </div>
+        <div class="look-row">
+          <span class="look-label">主题</span>
+          <button class="btn small" id="btn-theme">浅色</button>
+          <span class="look-hint">亮 / 米色 / 深色</span>
+        </div>
+        <div class="look-row">
+          <span class="look-label">背景</span>
+          <span class="sw sw-theme" data-bg="" title="跟随主题"></span>
+          <span class="sw" data-bg="#ffffff" style="background:#ffffff"></span>
+          <span class="sw" data-bg="#f4ecd8" style="background:#f4ecd8"></span>
+          <span class="sw" data-bg="#e8f0e4" style="background:#e8f0e4"></span>
+          <span class="sw" data-bg="#1f232b" style="background:#1f232b"></span>
+          <input type="color" id="bg-custom" title="自定义背景色" />
+        </div>
+        <div class="look-row">
+          <span class="look-label">选区</span>
+          <span class="sw" data-sel="rgba(72,128,255,.35)" style="background:rgba(72,128,255,.35)"></span>
+          <span class="sw" data-sel="rgba(255,214,102,.6)" style="background:rgba(255,214,102,.6)"></span>
+          <span class="sw" data-sel="rgba(155,229,155,.55)" style="background:rgba(155,229,155,.55)"></span>
+          <span class="sw" data-sel="rgba(255,150,180,.5)" style="background:rgba(255,150,180,.5)"></span>
+        </div>
+        <div class="look-row">
+          <span class="look-label">高亮</span>
+          <span class="sw" data-hl="#ffd666" style="background:#ffd666"></span>
+          <span class="sw" data-hl="#9be59b" style="background:#9be59b"></span>
+          <span class="sw" data-hl="#9cc9ff" style="background:#9cc9ff"></span>
+          <span class="sw" data-hl="#ffb3c8" style="background:#ffb3c8"></span>
+          <span class="sw" data-hl="#d7b8ff" style="background:#d7b8ff"></span>
+        </div>
+        <div class="look-row">
+          <span class="look-label">翻页</span>
+          <button class="btn small" id="btn-flow" aria-pressed="false">上下滚动</button>
+          <span class="look-hint" id="look-flow-hint"></span>
+        </div>
+        <div class="look-row">
+          <span class="look-label">划选</span>
+          <button class="btn small" id="btn-selmenu">自动弹出</button>
+          <span class="look-hint" id="look-selmenu"></span>
+        </div>
+        <div class="look-hint" style="margin-top:8px">
+          Ctrl + 滚轮：PDF 缩放 / EPUB 调栏宽
+        </div>
+        <div class="look-row" style="margin-top:2px">
+          <span class="look-label"></span>
+          <button class="btn small ghost" id="btn-reset">恢复默认</button>
+        </div>
+      </div>
+
+      <div class="reader-body" id="reader-body">
+        <aside class="side" id="side" hidden></aside>
+        <div class="splitter" id="splitter" hidden title="拖动调整侧栏宽度"></div>
+        <div class="stage" id="stage"></div>
+      </div>
+    </section>
+
+    <div class="hud" id="hud" hidden></div>
+    <div class="bubble" id="bubble" hidden></div>
+    <div class="popover" id="popover" hidden></div>
+    <div class="toast" id="toast" hidden></div>
+    <div id="drop" hidden>松开鼠标导入 PDF / EPUB</div>
+
+    <!-- ==================== 翻译设置 ==================== -->
+    <div class="modal" id="settings" hidden>
+      <div class="modal-card">
+        <h2>翻译设置</h2>
+        <label>
+          翻译服务
+          <select id="cfg-provider">
+            <option value="mymemory">MyMemory（免费、免密钥，有每日额度）</option>
+            <option value="openai">OpenAI 兼容接口（自填 Key，质量更好）</option>
+          </select>
+        </label>
+        <div id="cfg-openai" hidden>
+          <label>Base URL<input id="cfg-base" placeholder="https://api.openai.com/v1" /></label>
+          <label>API Key<input id="cfg-key" type="password" placeholder="sk-..." /></label>
+          <label>模型<input id="cfg-model" placeholder="gpt-4o-mini" /></label>
+        </div>
+        <p class="note">
+          段落译文会按原文内容缓存到本地，同一段不会重复翻译、不会重复扣费。<br />
+          Key 只存在这台机器的浏览器里（localStorage），建议用单独的受限 Key。<br />
+          想完全离线又免费：本地跑 <code>ollama serve</code>，Base URL 填 <code>http://localhost:11434/v1</code>，
+          Key 随便填、模型填 <code>qwen2.5:7b</code> 之类；如果页面是双击打开的，Ollama 需要设置
+          <code>OLLAMA_ORIGINS=*</code> 才允许跨域。<br />
+          如果双击打开时翻译总是跨域失败，用本地服务器打开页面即可：<code>python -m http.server 8000</code>。
+        </p>
+        <div class="acts">
+          <button class="btn" id="cfg-test">测试连接</button>
+          <button class="btn primary" id="cfg-save">保存</button>
+          <button class="btn ghost" id="cfg-close">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- epub.js 不在这里同步加载：改由下面的模块脚本按多个 CDN 依次尝试（见 loadEpubJs），
+         这样单个 CDN 被墙或超时不会让 EPUB 功能直接不可用。 -->
+
+    <script type="module">
+      /* =====================================================================
+       * 1. 依赖加载
+       *    两个库都按「多个 CDN 依次尝试」加载，单个源被墙/超时不会让功能直接不可用。
+       * ================================================================== */
+      const PDFJS_VERSION = '4.10.38';
+      const PDFJS_CDNS = [
+        'https://cdn.jsdelivr.net/npm/pdfjs-dist@' + PDFJS_VERSION + '/build/',
+        'https://fastly.jsdelivr.net/npm/pdfjs-dist@' + PDFJS_VERSION + '/build/',
+        'https://unpkg.com/pdfjs-dist@' + PDFJS_VERSION + '/build/',
+      ];
+      const EPUB_CDNS = [
+        'https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js',
+        'https://fastly.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js',
+        'https://unpkg.com/epubjs@0.3.93/dist/epub.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/epub.js/0.3.93/epub.min.js',
+      ];
+      // epub.js 的浏览器版不自带 JSZip，必须在它之前把 window.JSZip 准备好，
+      // 否则解压时会抛 "JSZip lib not loaded"。
+      const JSZIP_CDNS = [
+        'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+        'https://fastly.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+        'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+      ];
+
+      const deps = { pdfBase: null, epubUrl: null, jszipUrl: null, failures: [] };
+      let PDFJS_BASE = PDFJS_CDNS[0];
+      let pdfjsLib = null;
+
+      /** 诊断上报：只在通过 http(s) 打开时生效，失败也不影响阅读 */
+      function diag(event, data) {
+        try {
+          if (!/^https?:$/.test(location.protocol)) return;
+          // 只在本地开发时上报：部署到公网后没有 /diag 接口，没必要制造一堆 404
+          if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) return;
+          fetch('/diag', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              event,
+              at: new Date().toISOString(),
+              url: location.href,
+              ua: navigator.userAgent,
+              data: data === undefined ? null : data,
+            }),
+          }).catch(() => {});
+        } catch {
+          /* 诊断不能影响阅读 */
+        }
+      }
+
+      function loadScript(url, timeoutMs = 15000) {
+        return new Promise((resolve, reject) => {
+          const el = document.createElement('script');
+          const timer = setTimeout(() => {
+            el.remove();
+            reject(new Error('超时 ' + timeoutMs + 'ms'));
+          }, timeoutMs);
+          el.src = url;
+          el.onload = () => {
+            clearTimeout(timer);
+            resolve(url);
+          };
+          el.onerror = () => {
+            clearTimeout(timer);
+            el.remove();
+            reject(new Error('加载失败'));
+          };
+          document.head.appendChild(el);
+        });
+      }
+
+      async function loadPdfJs() {
+        for (const base of PDFJS_CDNS) {
+          for (const file of ['pdf.min.mjs', 'pdf.mjs']) {
+            try {
+              const lib = await import(/* @vite-ignore */ base + file);
+              PDFJS_BASE = base;
+              return lib;
+            } catch (err) {
+              deps.failures.push('pdf.js ' + base + file + ' → ' + (err && err.message));
+            }
+          }
+        }
+        return null;
+      }
+
+      async function loadEpubJs() {
+        if (typeof window.ePub === 'function' && typeof window.JSZip === 'function') return 'inline';
+
+        // 先 jszip，后 epub.js —— 顺序不能反
+        if (typeof window.JSZip !== 'function') {
+          for (const url of JSZIP_CDNS) {
+            try {
+              await loadScript(url);
+            } catch (err) {
+              deps.failures.push('jszip ' + url + ' → ' + (err && err.message));
+              continue;
+            }
+            if (typeof window.JSZip === 'function') {
+              deps.jszipUrl = url;
+              break;
+            }
+            deps.failures.push('jszip ' + url + ' 加载了，但 window.JSZip 是 ' + typeof window.JSZip);
+          }
+        } else {
+          deps.jszipUrl = 'inline';
+        }
+
+        for (const url of EPUB_CDNS) {
+          try {
+            await loadScript(url);
+          } catch (err) {
+            deps.failures.push('epub.js ' + url + ' → ' + (err && err.message));
+            continue;
+          }
+          if (typeof window.ePub === 'function') return url;
+          deps.failures.push('epub.js ' + url + ' 加载了，但 window.ePub 是 ' + typeof window.ePub);
+        }
+        return null;
+      }
+
+      /* ---------------------------------------------------------------
+       * Tesseract.js：扫描版 PDF 的 OCR。按需加载（点了「识别」才下载），
+       * 语言模型几十 MB，所以绝不能放在启动路径上。
+       * ------------------------------------------------------------- */
+      const TESSERACT_CDNS = [
+        {
+          js: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',
+          worker: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
+          core: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0/',
+        },
+        {
+          js: 'https://unpkg.com/tesseract.js@5.1.1/dist/tesseract.min.js',
+          worker: 'https://unpkg.com/tesseract.js@5.1.1/dist/worker.min.js',
+          core: 'https://unpkg.com/tesseract.js-core@5.1.0/',
+        },
+      ];
+      let tesseractPromise = null;
+      // langPath 也可以改成本地目录（自建服务器时把 traineddata 放同目录即可）
+      const tessPaths = { workerPath: '', corePath: '', langPath: 'https://tessdata.projectnaptha.com/4.0.0' };
+
+      function loadTesseract() {
+        if (window.Tesseract) return Promise.resolve(window.Tesseract);
+        if (tesseractPromise) return tesseractPromise;
+        tesseractPromise = (async () => {
+          let lastError = null;
+          for (const cdn of TESSERACT_CDNS) {
+            try {
+              await loadScript(cdn.js, 60000);
+            } catch (err) {
+              lastError = err;
+              deps.failures.push('tesseract.js ' + cdn.js + ' → ' + err.message);
+              continue;
+            }
+            if (window.Tesseract) {
+              tessPaths.workerPath = cdn.worker;
+              tessPaths.corePath = cdn.core;
+              return window.Tesseract;
+            }
+            lastError = new Error('tesseract.js 脚本加载了但没有 window.Tesseract');
+            deps.failures.push(String(lastError.message));
+          }
+          tesseractPromise = null; // 允许下次重试
+          throw lastError || new Error('tesseract.js 加载失败');
+        })();
+        return tesseractPromise;
+      }
+
+      pdfjsLib = await loadPdfJs();
+      deps.pdfBase = pdfjsLib ? PDFJS_BASE : null;
+      if (pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.mjs';
+      deps.epubUrl = await loadEpubJs();
+
+      /* =====================================================================
+       * 2. 通用工具
+       * ================================================================== */
+      const $ = (sel, root = document) => root.querySelector(sel);
+      const esc = (s) =>
+        String(s ?? '').replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]),
+        );
+      const uid = () => Math.random().toString(36).slice(2, 10);
+
+      /** 稳定哈希：同一个字符串永远得到同一个 id，所以能当翻译缓存的键 */
+      function hashId(str) {
+        let h = 5381;
+        for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+        return Math.abs(h).toString(36) + str.length.toString(36);
+      }
+      const bookIdOf = (file) => 'b' + hashId(`${file.name}|${file.size}|${file.lastModified}`);
+
+      function detectFormat(file) {
+        const name = (file.name || '').toLowerCase();
+        if (name.endsWith('.pdf') || file.type === 'application/pdf') return 'pdf';
+        if (name.endsWith('.epub') || file.type === 'application/epub+zip') return 'epub';
+        return null;
+      }
+      const titleFromName = (name) => (name || 'Untitled').replace(/\.[^.]+$/, '').replace(/_+/g, ' ').trim();
+      const fmtSize = (n) =>
+        !n ? '' : n / 1048576 >= 1 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+      const fmtPct = (p) => Math.round((p || 0) * 100) + '%';
+
+      let toastTimer = null;
+      function toast(msg) {
+        const el = $('#toast');
+        el.textContent = msg;
+        el.hidden = false;
+        clearTimeout(toastTimer);
+        // 信息越长停留越久，否则用户根本来不及看清失败原因
+        toastTimer = setTimeout(() => (el.hidden = true), Math.min(15000, Math.max(2200, String(msg).length * 90)));
+      }
+
+      /* ---- 文本处理（v2 会把 lemmaOf 换成 ECDICT + WordNet 词形还原）---- */
+      const firstWord = (t) => (t.match(/[A-Za-z][A-Za-z'’-]*/) || [t.trim().slice(0, 32)])[0];
+      const lookupKey = (w) => w.toLowerCase().replace(/[^a-z'’-]/g, '');
+
+      const LEMMA_RULES = [
+        [/ies$/, 'y'], [/ves$/, 'f'], [/(?:ses|xes|zes|ches|shes)$/, ''],
+        [/ing$/, ''], [/ed$/, ''], [/es$/, ''], [/s$/, ''], [/est$/, ''], [/er$/, ''],
+      ];
+      function lemmaOf(word) {
+        const w = lookupKey(word);
+        if (w.length <= 4) return w;
+        for (const [re, rep] of LEMMA_RULES) {
+          if (!re.test(w)) continue;
+          let base = w.replace(re, rep);
+          if (base.length < 3) continue;
+          if (/([bdfglmnprt])\1$/.test(base)) base = base.slice(0, -1); // running -> run
+          return base;
+        }
+        return w;
+      }
+
+      function sentenceAround(text, index, length, maxLen = 400) {
+        if (!text) return '';
+        const start = Math.max(0, Math.min(index, text.length));
+        const end = Math.max(start, Math.min(index + length, text.length));
+        let s = start;
+        let e = end;
+        while (s > 0 && !/[.!?。！？\n]/.test(text[s - 1])) s--;
+        while (e < text.length && !/[.!?。！？\n]/.test(text[e])) e++;
+        if (e < text.length) e++;
+        let out = text.slice(s, e);
+        if (out.length > maxLen) {
+          const half = Math.floor(maxLen / 2);
+          out = text.slice(s + Math.max(0, start - s - half), s + Math.min(out.length, start - s + half));
+        }
+        return out.replace(/\s+/g, ' ').trim();
+      }
+
+      /** 在整段文字里找到选中的那句，作为划词翻译的语境 */
+      function contextFor(fullText, selected) {
+        const needle = String(selected).replace(/\s+/g, ' ').trim();
+        if (!needle) return undefined;
+        const flat = String(fullText).replace(/\s+/g, ' ');
+        const idx = flat.indexOf(needle);
+        return idx < 0 ? undefined : sentenceAround(flat, idx, needle.length);
+      }
+
+      function markWord(text, word) {
+        return markWordImpl(text, word);
+      }
+
+      /** 高亮色统一转成半透明：不透明色直接当填充会盖住文字（之前就是这个 bug） */
+      function hlFill(color) {
+        const c = String(color || '#ffd666').trim();
+        const six = c.match(/^#([0-9a-fA-F]{6})$/);
+        if (six) {
+          const n = parseInt(six[1], 16);
+          return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',0.38)';
+        }
+        const three = c.match(/^#([0-9a-fA-F]{3})$/);
+        if (three) {
+          const rgb = three[1].split('').map((x) => parseInt(x + x, 16));
+          return 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.38)';
+        }
+        return c; // 本来就是 rgba 就直接用
+      }
+
+      function markWordImpl(text, word) {
+        const needle = String(word || '');
+        if (!needle) return esc(text);
+        const idx = String(text).toLowerCase().indexOf(needle.toLowerCase());
+        if (idx < 0) return esc(text);
+        return (
+          esc(text.slice(0, idx)) +
+          '<mark>' + esc(text.slice(idx, idx + needle.length)) + '</mark>' +
+          esc(text.slice(idx + needle.length))
+        );
+      }
+
+      /* =====================================================================
+       * 3. 本地存储（IndexedDB）
+       *    files        原始文件
+       *    books        书目 + 阅读进度
+       *    highlights   高亮锚点（带归一化坐标，换字号也不会漂）
+       *    vocab        生词本
+       *    translations 译文缓存：同一段原文不重复翻译
+       * ================================================================== */
+      const DB_NAME = 'hello-codex-reader';
+      let dbPromise = null;
+
+      function db() {
+        if (dbPromise) return dbPromise;
+        dbPromise = new Promise((resolve, reject) => {
+          const req = indexedDB.open(DB_NAME, 2);
+          req.onupgradeneeded = () => {
+            const d = req.result;
+            if (!d.objectStoreNames.contains('files')) d.createObjectStore('files');
+            if (!d.objectStoreNames.contains('books')) d.createObjectStore('books', { keyPath: 'id' });
+            if (!d.objectStoreNames.contains('highlights')) {
+              d.createObjectStore('highlights', { keyPath: 'id' }).createIndex('bookId', 'bookId');
+            }
+            if (!d.objectStoreNames.contains('vocab')) {
+              d.createObjectStore('vocab', { keyPath: 'id' }).createIndex('bookId', 'bookId');
+            }
+            if (!d.objectStoreNames.contains('translations')) {
+              d.createObjectStore('translations', { keyPath: 'key' });
+            }
+            // OCR 结果：扫描版 PDF 按页识别的文字块（归一化坐标），键为 bookId:page:langs
+            if (!d.objectStoreNames.contains('ocr')) {
+              d.createObjectStore('ocr', { keyPath: 'key' });
+            }
+          };
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        return dbPromise;
+      }
+
+      async function idb(store, mode, run) {
+        const d = await db();
+        return new Promise((resolve, reject) => {
+          const t = d.transaction(store, mode);
+          const req = run(t.objectStore(store));
+          t.onabort = () => reject(t.error);
+          if (req) {
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+          } else {
+            t.oncomplete = () => resolve(undefined);
+          }
+        });
+      }
+
+      const dbPut = (store, value, key) =>
+        idb(store, 'readwrite', (s) => (key === undefined ? s.put(value) : s.put(value, key)));
+      const dbGet = (store, key) => idb(store, 'readonly', (s) => s.get(key));
+      const dbAll = (store) => idb(store, 'readonly', (s) => s.getAll());
+      const dbDel = (store, key) => idb(store, 'readwrite', (s) => s.delete(key));
+      const dbByIndex = (store, index, key) => idb(store, 'readonly', (s) => s.index(index).getAll(key));
+
+      /* =====================================================================
+       * 4. 翻译引擎
+       *    对外只有两个函数：translate(text) 和 testTranslate()。
+       *    内部：缓存命中 → 直接返回；否则进队列，按 provider 的批量大小并发请求。
+       * ================================================================== */
+      const settings = { provider: 'mymemory', baseUrl: '', apiKey: '', model: '' };
+
+      function loadSettings() {
+        try {
+          Object.assign(settings, JSON.parse(localStorage.getItem('reader.translate') || '{}'));
+        } catch {
+          /* 配置坏了就用默认值 */
+        }
+      }
+      const saveSettings = () => localStorage.setItem('reader.translate', JSON.stringify(settings));
+
+      const SYSTEM_PROMPT =
+        '你是专业的英译中翻译。用户会给你一个 JSON 字符串数组，请逐条翻译成简体中文：' +
+        '保持术语前后一致，保留数字、公式、人名与专有名词，不要改写、不要总结、不要补充解释。' +
+        '只输出一个 JSON 字符串数组，元素个数和顺序必须与输入完全一致。';
+
+      /** 按句子边界切成长度受限的片段（免费接口对单次请求长度有限制） */
+      function splitForLimit(text, limit) {
+        if (text.length <= limit) return [text];
+        const sentences = text.match(/[^.!?]+[.!?]*\s*/g) || [text];
+        const out = [];
+        let cur = '';
+        for (const s of sentences) {
+          if (s.length > limit) {
+            if (cur.trim()) out.push(cur.trim());
+            cur = '';
+            for (let i = 0; i < s.length; i += limit) {
+              const piece = s.slice(i, i + limit).trim();
+              if (piece) out.push(piece);
+            }
+            continue;
+          }
+          if ((cur + s).length > limit && cur) {
+            out.push(cur.trim());
+            cur = '';
+          }
+          cur += s;
+        }
+        if (cur.trim()) out.push(cur.trim());
+        return out;
+      }
+
+      async function mymemoryTranslateOne(text) {
+        const parts = [];
+        for (const chunk of splitForLimit(text, 460)) {
+          const url =
+            'https://api.mymemory.translated.net/get?langpair=en%7Czh-CN&q=' + encodeURIComponent(chunk);
+          let res;
+          try {
+            res = await fetch(url);
+          } catch (err) {
+            throw new Error('网络请求失败（离线或跨域被拦）：' + err.message);
+          }
+          if (!res.ok) {
+            throw new Error(
+              '翻译服务返回 ' + res.status +
+                (res.status === 429 ? '：免费额度可能已用完，可在「翻译设置」里换成自己的接口' : ''),
+            );
+          }
+          const json = await res.json();
+          const t = json && json.responseData && json.responseData.translatedText;
+          if (!t) throw new Error((json && json.responseDetails) || '翻译服务没有返回内容');
+          if (/MYMEMORY WARNING/i.test(t)) throw new Error(t.slice(0, 120));
+          parts.push(t);
+        }
+        return parts.join('');
+      }
+
+      function parseJsonArray(content, expected) {
+        const s = String(content).trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+        const a = s.indexOf('[');
+        const b = s.lastIndexOf(']');
+        if (a >= 0 && b > a) {
+          try {
+            const arr = JSON.parse(s.slice(a, b + 1));
+            if (Array.isArray(arr)) return arr.map((x) => String(x ?? ''));
+          } catch {
+            /* 落到下面的兜底解析 */
+          }
+        }
+        const lines = s
+          .split('\n')
+          .map((l) => l.replace(/^\s*\d+\s*[.、)]\s*/, '').trim())
+          .filter(Boolean);
+        if (lines.length >= expected) return lines.slice(0, expected);
+        if (expected === 1) return [s];
+        throw new Error('无法解析模型返回的翻译结果');
+      }
+
+      async function openaiTranslate(texts) {
+        if (!settings.baseUrl || !settings.model) {
+          throw new Error('请先打开「翻译设置」，填好 Base URL 和模型');
+        }
+        const url = settings.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+        const headers = { 'Content-Type': 'application/json' };
+        if (settings.apiKey) headers.Authorization = 'Bearer ' + settings.apiKey;
+        let res;
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model: settings.model,
+              temperature: 0,
+              messages: [
+                { role: 'system', content: SYSTEM_PROMPT },
+                { role: 'user', content: JSON.stringify(texts) },
+              ],
+            }),
+          });
+        } catch (err) {
+          throw new Error('请求失败（检查 Base URL / 跨域 / 服务是否在跑）：' + err.message);
+        }
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '');
+          throw new Error('接口返回 ' + res.status + '：' + detail.slice(0, 180));
+        }
+        const json = await res.json();
+        const content = (json && json.choices && json.choices[0] && json.choices[0].message
+          ? json.choices[0].message.content
+          : '') || '';
+        return parseJsonArray(content, texts.length);
+      }
+
+      const PROVIDERS = {
+        mymemory: {
+          label: 'MyMemory',
+          batchSize: 1,
+          async translate(texts) {
+            const out = [];
+            for (const t of texts) out.push(await mymemoryTranslateOne(t));
+            return out;
+          },
+        },
+        openai: {
+          label: 'OpenAI 兼容接口',
+          batchSize: 6,
+          translate: openaiTranslate,
+        },
+      };
+      const currentProvider = () => PROVIDERS[settings.provider] || PROVIDERS.mymemory;
+
+      const cacheKey = (text) => hashId(String(text).replace(/\s+/g, ' ').trim());
+      const transGet = (key) =>
+        dbGet('translations', key).then((r) => (r && r.text ? r.text : null));
+      const transPut = (key, source, text) =>
+        dbPut('translations', { key, source: String(source).slice(0, 400), text, at: Date.now() });
+
+      const transQueue = [];
+      const transInflight = new Map();
+      const MAX_CONCURRENCY = 3;
+      let transRunning = 0;
+
+      function pumpTranslate() {
+        const provider = currentProvider();
+        while (transRunning < MAX_CONCURRENCY && transQueue.length) {
+          const jobs = transQueue.splice(0, Math.max(1, provider.batchSize));
+          transRunning++;
+          provider
+            .translate(jobs.map((j) => j.text))
+            .then((list) => jobs.forEach((j, i) => j.resolve(String(list[i] ?? list[0] ?? ''))))
+            .catch((err) => jobs.forEach((j) => j.reject(err)))
+            .finally(() => {
+              transRunning--;
+              pumpTranslate();
+            });
+        }
+      }
+
+      function scheduleTranslate(text) {
+        return new Promise((resolve, reject) => {
+          transQueue.push({ text, resolve, reject });
+          pumpTranslate();
+        });
+      }
+
+      /** 主入口：优先读缓存，同一段并发请求会合并成一次 */
+      function translate(text) {
+        const clean = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!clean) return Promise.resolve('');
+        const key = cacheKey(clean);
+        if (transInflight.has(key)) return transInflight.get(key);
+        const job = (async () => {
+          const cached = await transGet(key);
+          if (cached) return cached;
+          const out = await scheduleTranslate(clean);
+          await transPut(key, clean, out);
+          return out;
+        })().finally(() => transInflight.delete(key));
+        transInflight.set(key, job);
+        return job;
+      }
+
+      async function testTranslate() {
+        const out = await currentProvider().translate(['Reading in two languages is surprisingly useful.']);
+        return out[0];
+      }
+
+      /* =====================================================================
+       * 5. PDF 适配器
+       *    canvas 画页面 + 隐藏文本层负责划词；文本按行合并成段落，用于对照。
+       * ================================================================== */
+      function createPdfAdapter() {
+        const format = 'pdf';
+        let doc = null;
+        let host = null;
+        let bookId = '';
+        const baseScale = 1.35;
+        let scale = baseScale;
+        let pageEls = [];
+        let observer = null;
+        let currentPage = 1;
+        let scrollTimer = null;
+        let highlights = [];
+        let biMode = 'off';
+        let hoverKey = '';
+        let wheelMode = 'scroll';
+        let wheelLock = 0;
+        let selMenu = 'auto';
+        let pagesWithText = 0;
+        let pagesWithoutText = 0;
+        let wheelHits = 0;
+        const selectCbs = new Set();
+        const locCbs = new Set();
+        const hoverCbs = new Set();
+        const paraCbs = new Set();
+
+        const percentOf = (page) => (doc && doc.numPages ? page / doc.numPages : 0);
+        const notify = () => currentLocation().then((loc) => locCbs.forEach((cb) => cb(loc)));
+        const paragraphsOf = (page) => (pageEls[page - 1] && pageEls[page - 1]._paras) || [];
+        const notifyParagraphs = () =>
+          paraCbs.forEach((cb) => cb({ page: currentPage, items: paragraphsOf(currentPage) }));
+
+        async function currentLocation() {
+          const total = doc ? doc.numPages : 0;
+          return {
+            bookId,
+            format,
+            page: currentPage,
+            pageNo: currentPage,
+            pageTotal: total,
+            percent: percentOf(currentPage),
+            excerpt: '',
+          };
+        }
+
+        async function buildToc(ctx) {
+          let outline = null;
+          try {
+            outline = await doc.getOutline();
+          } catch {
+            return [];
+          }
+          if (!outline) return [];
+          const items = [];
+          async function walk(nodes, depth) {
+            for (const node of nodes) {
+              let page = 0;
+              try {
+                const dest = typeof node.dest === 'string' ? await doc.getDestination(node.dest) : node.dest;
+                if (Array.isArray(dest) && dest[0]) page = (await doc.getPageIndex(dest[0])) + 1;
+              } catch {
+                /* 目录项解析失败就跳过 */
+              }
+              if (page) {
+                items.push({
+                  label: String(node.title || '').trim() || '第 ' + page + ' 页',
+                  depth,
+                  location: { bookId: ctx.bookId, format, page, percent: percentOf(page), excerpt: '' },
+                });
+              }
+              if (node.items && node.items.length) await walk(node.items, depth + 1);
+            }
+          }
+          await walk(outline, 0);
+          return items;
+        }
+
+        async function open(source, ctx) {
+          bookId = ctx.bookId;
+          const data = await source.arrayBuffer();
+          doc = await pdfjsLib.getDocument({
+            data,
+            isEvalSupported: false,
+            standardFontDataUrl: PDFJS_BASE + 'standard_fonts/',
+          }).promise;
+          return { meta: { id: bookId, title: ctx.title, format, size: source.size }, toc: await buildToc(ctx) };
+        }
+
+        /**
+         * 把 pdf.js 的文本片段按「同一行」聚类，再把行合并成段落。
+         * 判据：行间距接近、左边界对齐、上一行是满行、且结尾没有句末标点。
+         */
+        function extractParagraphs(textContent, viewport) {
+          const items = (textContent.items || []).filter((it) => it.str && it.str.trim());
+          if (!items.length) return [];
+
+          const lines = [];
+          for (const it of items) {
+            const tr = it.transform || [1, 0, 0, 1, 0, 0];
+            const x = tr[4];
+            const y = tr[5];
+            const h = Math.abs(tr[3]) || it.height || 10;
+            let line = lines.find((l) => Math.abs(l.y - y) < Math.max(h, l.h) * 0.55);
+            if (!line) {
+              line = { y, h, parts: [] };
+              lines.push(line);
+            }
+            line.h = Math.max(line.h, h);
+            line.parts.push({ x, str: it.str, w: it.width || 0 });
+          }
+
+          // 同一水平线可能横跨左右两栏（或正文 + 页码），所以要按水平间距再切成段
+          const segments = [];
+          for (const l of lines) {
+            l.parts.sort((a, b) => a.x - b.x);
+            const gapLimit = Math.max(l.h * 1.5, 16);
+            let seg = null;
+            for (const p of l.parts) {
+              if (!seg || p.x - seg.x1 > gapLimit) {
+                seg = { y: l.y, h: l.h, x0: p.x, x1: p.x + p.w, parts: [p] };
+                segments.push(seg);
+              } else {
+                seg.parts.push(p);
+                seg.x1 = Math.max(seg.x1, p.x + p.w);
+              }
+            }
+          }
+          for (const s of segments) {
+            // 同一个片段里，前后两项之间有明显空隙就补一个空格：
+            // pdf.js 的 str 不一定自带空格，直接拼会粘成 "toreading" 这种词。
+            let text = '';
+            let prev = null;
+            for (const p of s.parts) {
+              if (prev && p.x - (prev.x + prev.w) > s.h * 0.25) {
+                if (!/\s$/.test(text) && !/^\s/.test(p.str)) text += ' ';
+              }
+              text += p.str;
+              prev = p;
+            }
+            s.text = text.replace(/\s+/g, ' ').trim();
+          }
+          const rows = segments
+            .filter((r) => r.text && /\p{L}/u.test(r.text))
+            .sort((a, b) => b.y - a.y); // PDF 的 y 轴向上
+
+          if (!rows.length) return [];
+          const pageLeft = Math.min(...rows.map((r) => r.x0));
+          const pageRight = Math.max(...rows.map((r) => r.x1));
+          const pageWidth = Math.max(1, pageRight - pageLeft);
+          // 尺寸判断一律用「整页宽度」（PDF 单位），而不是本页实际的文字宽度，
+          // 否则窄栏或短行会让容差缩到没法用。
+          const box = viewport.viewBox;
+          const pdfWidth = box && box.length === 4 ? Math.abs(box[2] - box[0]) : pageWidth;
+          // 双栏排版时左右两栏的行都到不了整页右边界，所以按「同一栏」分别算右边界
+          const colTolerance = pdfWidth * 0.04;
+          for (const r of rows) {
+            const sameColumn = rows.filter((o) => Math.abs(o.x0 - r.x0) < colTolerance);
+            r.localRight = Math.max(...sameColumn.map((o) => o.x1));
+          }
+
+          // 分栏判断：各栏水平范围互不重叠、且都有若干行时，按「先左栏后右栏」的阅读顺序处理
+          const clusters = [];
+          for (const r of [...rows].sort((a, b) => a.x0 - b.x0)) {
+            const c = clusters.find((cl) => Math.abs(cl.x0 - r.x0) < colTolerance);
+            if (c) c.rows.push(r);
+            else clusters.push({ x0: r.x0, rows: [r] });
+          }
+          clusters.sort((a, b) => a.x0 - b.x0);
+          const multiColumn =
+            clusters.length >= 2 &&
+            clusters.every((c) => c.rows.length >= 3) &&
+            clusters.every(
+              (c, i) =>
+                i === 0 ||
+                Math.min(...c.rows.map((x) => x.x0)) >=
+                  Math.max(...clusters[i - 1].rows.map((x) => x.x1)) - pageWidth * 0.05,
+            );
+          const readingOrder = multiColumn
+            ? clusters.flatMap((c) => [...c.rows].sort((a, b) => b.y - a.y))
+            : rows;
+
+          const blocks = [];
+          let cur = null;
+          for (const r of readingOrder) {
+            const gap = cur ? cur.y - r.y : 0;
+            // 行距自适应：同一段内行距基本一致，突然变大就是新段落了
+            const gapLimit = cur && cur.lastGap ? cur.lastGap * 1.3 + 0.5 : Math.max(cur ? cur.h : 0, r.h) * 1.6;
+            const sameColumn = cur && Math.abs(cur.x0 - r.x0) < colTolerance;
+            // 首行缩进：段落第一行比正文左边界右移
+            const indented = cur && r.x0 > cur.x0 + Math.max(6, pdfWidth * 0.02);
+            // 明显短于本栏右边界、且以句末标点收尾的行，视为段落最后一行
+            const prevEndsParagraph =
+              cur &&
+              cur.x1 < cur.localRight - (cur.localRight - pageLeft) * 0.12 &&
+              /[.!?;:]["')\]]?$/.test(cur.text);
+            const merge = cur && sameColumn && gap <= gapLimit && !indented && !prevEndsParagraph;
+            if (merge) {
+              cur.text = (cur.text + ' ' + r.text).replace(/\s+/g, ' ').trim();
+              cur.x0 = Math.min(cur.x0, r.x0);
+              cur.x1 = Math.max(cur.x1, r.x1);
+              cur.lastGap = gap;
+              cur.y = r.y;
+              cur.h = r.h;
+            } else {
+              cur = {
+                text: r.text,
+                x0: r.x0,
+                x1: r.x1,
+                localRight: r.localRight,
+                topY: r.y + r.h,
+                y: r.y,
+                h: r.h,
+                lastGap: null,
+              };
+              blocks.push(cur);
+            }
+          }
+
+          const vw = viewport.width;
+          const vh = viewport.height;
+          return blocks
+            .filter((b) => (b.text.match(/\p{L}/gu) || []).length >= 2 && b.text.length <= 4000)
+            .map((b, i) => {
+              const [x0, y0] = viewport.convertToViewportPoint(b.x0, b.topY);
+              const [x1, y1] = viewport.convertToViewportPoint(b.x1, b.y);
+              return {
+                index: i,
+                id: hashId(b.text),
+                text: b.text,
+                rect: {
+                  x: Math.min(x0, x1) / vw,
+                  y: Math.max(0, Math.min(y0, y1) / vh),
+                  w: Math.abs(x1 - x0) / vw,
+                  h: Math.min(1, Math.abs(y1 - y0) / vh),
+                },
+              };
+            });
+        }
+
+        /* ================= OCR：扫描版 PDF 的按页识别 ================= */
+        const ocrCache = new Map(); // pageNo -> words（会话内缓存，持久化在 IndexedDB）
+        let ocrLang = 'eng+chi_sim';
+        let ocrWorker = null;
+        let ocrWorkerLang = '';
+        let ocrProgressCb = null;
+        let ocrPsm = 3; // 版面分析模式：3 自动 / 6 单栏 / 1 多栏
+        const OCR_PIPELINE = 2; // 清理与分段逻辑的版本，升级即让旧缓存失效
+        const ocrTargetWidth = 2200; // OCR 渲染宽度，越高越准也越慢
+
+        async function getOcrWorker(lang, psm) {
+          const Tesseract = await loadTesseract();
+          const key = lang + '|' + psm;
+          if (ocrWorker && ocrWorkerLang === key) return ocrWorker;
+          if (ocrWorker) {
+            try {
+              await ocrWorker.terminate();
+            } catch {
+              /* ignore */
+            }
+            ocrWorker = null;
+          }
+          const worker = await Tesseract.createWorker(lang, 1, {
+            workerPath: tessPaths.workerPath,
+            corePath: tessPaths.corePath,
+            langPath: tessPaths.langPath,
+            logger: (m) => {
+              if (ocrProgressCb) ocrProgressCb(m);
+            },
+          });
+          // PSM：版面分析模式。书页用 6（单一文本块）通常比自动更干净
+          try {
+            await worker.setParameters({ tessedit_pageseg_mode: String(psm || 3) });
+          } catch (err) {
+            console.warn('[reader] 设置 OCR 分段模式失败', err);
+          }
+          ocrWorker = worker;
+          ocrWorkerLang = key;
+          return worker;
+        }
+
+        const CJK = '\\u3000-\\u303f\\u3400-\\u4dbf\\u4e00-\\u9fff\\uf900-\\ufaff\\uff00-\\uffef';
+
+        /**
+         * OCR 文本清理 —— 这一步对观感影响最大：
+         * Tesseract 认中文会在字与字之间插空格（"自动 化 测试"），必须合回去。
+         */
+        function normalizeOcrText(text) {
+          let t = String(text || '').replace(/\s+/g, ' ').trim();
+          t = t.replace(new RegExp('([' + CJK + '])\\s+(?=[' + CJK + '])', 'g'), '$1');
+          t = t.replace(new RegExp('([' + CJK + '])\\s+(?=[A-Za-z0-9])', 'g'), '$1 ');
+          t = t.replace(new RegExp('([A-Za-z0-9])\\s+(?=[' + CJK + '])', 'g'), '$1 ');
+          t = t.replace(/\s+([，。、；：？！）》」”’·])/g, '$1');
+          t = t.replace(/([（《「“‘])\s+/g, '$1');
+          t = t.replace(/\s+([,.;:!?%)\]])/g, '$1');
+          t = t.replace(/([A-Za-z])-\s+([a-z])/g, '$1$2');
+          return t.replace(/\s{2,}/g, ' ').trim();
+        }
+
+        /**
+         * 解析 Tesseract 的 TSV：一次拿到 页/块/段/行/词 五级结构 + 置信度。
+         * 段落边界直接用引擎给的，不再靠我按 y 猜。
+         */
+        function parseOcrTsv(tsv, width, height) {
+          const rows = [];
+          const lines = String(tsv || '').split('\n');
+          for (let i = 1; i < lines.length; i++) {
+            const c = lines[i].split('\t');
+            if (c.length < 12) continue;
+            const level = +c[0];
+            if (!level) continue;
+            rows.push({
+              level,
+              block: +c[2],
+              par: +c[3],
+              line: +c[4],
+              left: +c[6],
+              top: +c[7],
+              w: +c[8],
+              h: +c[9],
+              conf: +c[10],
+              text: c.slice(11).join('\t').trim(),
+            });
+          }
+          const box = (r) => ({
+            x: r.left / width,
+            y: r.top / height,
+            w: Math.max(0.002, r.w / width),
+            h: Math.max(0.004, r.h / height),
+          });
+          const words = [];
+          for (const r of rows) {
+            if (r.level !== 5 || !r.text) continue;
+            const word = Object.assign({ t: r.text, conf: r.conf, block: r.block, par: r.par, line: r.line }, box(r));
+            if (isNoiseWord(word)) continue; // 页眉/页脚的孤立字符直接丢
+            words.push(word);
+          }
+          const paragraphs = [];
+          for (const r of rows) {
+            if (r.level !== 3) continue;
+            const mine = words.filter((w) => w.block === r.block && w.par === r.par);
+            const text = normalizeOcrText(mine.map((w) => w.t).join(' '));
+            if (!text) continue;
+            const confs = mine.filter((w) => w.conf > 0).map((w) => w.conf);
+            paragraphs.push({
+              block: r.block,
+              conf: confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : 0,
+              text,
+              rect: box(r),
+            });
+          }
+          const allConf = words.map((w) => w.conf).filter((c) => c > 0);
+          return {
+            words,
+            paragraphs: filterOcrParagraphs(paragraphs, words),
+            conf: allConf.length ? allConf.reduce((a, b) => a + b, 0) / allConf.length : 0,
+          };
+        }
+
+        /**
+         * 版面过滤：页眉/页脚/页码/单字符噪声不要混进正文。
+         * 判断依据是「贴着页边 + 行高偏小 + 文字很短」，比较保守，避免误删正文。
+         */
+        function isNoiseWord(word) {
+          const cy = word.y + word.h / 2;
+          const inMargin = cy < 0.045 || cy > 0.955;
+          const letters = (String(word.t).match(/\p{L}/gu) || []).length;
+          // 贴着页边、只有一两个字符、又很窄 —— 基本就是页眉页脚杂质
+          return inMargin && letters <= 2 && word.w < 0.06;
+        }
+
+        function filterOcrParagraphs(paragraphs, words) {
+          if (!paragraphs || !paragraphs.length) return [];
+          const heights = words.map((w) => w.h).sort((a, b) => a - b);
+          const medianH = heights.length ? heights[Math.floor(heights.length / 2)] : 0.02;
+          return paragraphs.filter((p) => {
+            const letters = (p.text.match(/\p{L}/gu) || []).length;
+            if (letters < 2) return false;
+            const inMargin = p.rect.y < 0.045 || p.rect.y + p.rect.h > 0.955;
+            const isSmall = p.rect.h <= medianH * 2.4;
+            if (inMargin && isSmall && letters <= 10) return false;
+            return true;
+          });
+        }
+
+        /** 灰度 + 对比度拉伸：扫描件发灰时能明显提升识别率 */
+        function preprocessForOcr(canvas) {
+          try {
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = img.data;
+            const hist = new Array(256).fill(0);
+            for (let i = 0; i < data.length; i += 4) {
+              const g = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+              data[i] = data[i + 1] = data[i + 2] = g;
+              hist[g | 0]++;
+            }
+            const total = data.length / 4;
+            let low = 0;
+            let high = 255;
+            let acc = 0;
+            for (let i = 0; i < 256; i++) {
+              acc += hist[i];
+              if (acc > total * 0.02) {
+                low = i;
+                break;
+              }
+            }
+            acc = 0;
+            for (let i = 255; i >= 0; i--) {
+              acc += hist[i];
+              if (acc > total * 0.02) {
+                high = i;
+                break;
+              }
+            }
+            // 动态范围太小（整页发灰）才拉伸，避免把正常页拉爆
+            if (high - low > 40 && high - low < 230) {
+              const scale = 255 / (high - low);
+              for (let i = 0; i < data.length; i += 4) {
+                let v = (data[i] - low) * scale;
+                v = v < 0 ? 0 : v > 255 ? 255 : v;
+                data[i] = data[i + 1] = data[i + 2] = v;
+              }
+            }
+            ctx.putImageData(img, 0, 0);
+          } catch (err) {
+            console.warn('[reader] OCR 预处理失败，用原图继续', err);
+          }
+        }
+
+        /** 按目标宽度渲染一页给 OCR 用（分辨率越高越准，但更慢） */
+        async function renderForOcr(page, targetWidth) {
+          const base = page.getViewport({ scale: 1 });
+          const scale = Math.max(1.5, Math.min(4, (targetWidth || 2200) / base.width));
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.floor(viewport.width);
+          canvas.height = Math.floor(viewport.height);
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          await page.render({ canvasContext: ctx, viewport }).promise;
+          return canvas;
+        }
+
+        const CJK_ONLY = new RegExp('^[' + CJK + ']+$');
+
+        /** 相邻中日韩词块合并成一个 span：选出来是「自动化测试」，不是「自动 化 测试」 */
+        function groupWordsForLayer(words) {
+          const out = [];
+          for (const word of words) {
+            const prev = out[out.length - 1];
+            const canMerge =
+              prev &&
+              prev.block === word.block &&
+              prev.line === word.line &&
+              CJK_ONLY.test(prev.t) &&
+              CJK_ONLY.test(word.t) &&
+              word.x - (prev.x + prev.w) < word.h * 0.5;
+            if (canMerge) {
+              prev.t += word.t;
+              prev.w = Math.max(prev.x + prev.w, word.x + word.w) - prev.x;
+              prev.conf = (prev.conf + word.conf) / 2;
+            } else {
+              out.push(Object.assign({}, word));
+            }
+          }
+          return out;
+        }
+
+        /** 用 OCR 词块搭出可选中文本层（结构与 pdf.js 文本层一致） */
+        function buildOcrTextLayer(el, words) {
+          const layer = el.querySelector('.text-layer');
+          const w = el.clientWidth || el.offsetWidth || 1;
+          const h = el.clientHeight || el.offsetHeight || 1;
+          layer.innerHTML = '';
+          const frag = document.createDocumentFragment();
+          for (const word of groupWordsForLayer(words)) {
+            const span = document.createElement('span');
+            // 西文词后面补一个空格，否则跨 span 选中会粘成 "helloworld"
+            span.textContent = CJK_ONLY.test(word.t) ? word.t : word.t + ' ';
+            span.style.left = word.x * w + 'px';
+            span.style.top = word.y * h + 'px';
+            span.style.fontSize = Math.max(6, word.h * h * 0.95) + 'px';
+            span.style.lineHeight = '1';
+            frag.appendChild(span);
+          }
+          layer.appendChild(frag);
+        }
+
+        /** OCR 词块 → 段落：先聚成行，再按行距/缩进合并（和 PDF 文本层同一套思路） */
+        function paragraphsFromWords(words) {
+          if (!words || !words.length) return [];
+          const lines = [];
+          for (const word of words) {
+            const cy = word.y + word.h / 2;
+            let line = lines.find((l) => Math.abs(l.cy - cy) < word.h * 0.6);
+            if (!line) {
+              line = { cy, h: word.h, items: [] };
+              lines.push(line);
+            }
+            line.h = Math.max(line.h, word.h);
+            line.items.push(word);
+          }
+          const rows = lines
+            .map((l) => {
+              l.items.sort((a, b) => a.x - b.x);
+              const top = Math.min(...l.items.map((i) => i.y));
+              const bottom = Math.max(...l.items.map((i) => i.y + i.h));
+              return {
+                y: top,
+                h: bottom - top,
+                x0: l.items[0].x,
+                x1: Math.max(...l.items.map((i) => i.x + i.w)),
+                text: l.items.map((i) => i.t).join(' ').replace(/\s+/g, ' ').trim(),
+              };
+            })
+            .filter((r) => r.text)
+            .sort((a, b) => a.y - b.y);
+
+          const blocks = [];
+          let cur = null;
+          let prev = null;
+          for (const row of rows) {
+            const gap = prev ? row.y - (prev.y + prev.h) : 0;
+            const limit = cur && cur.gap ? cur.gap * 1.7 : Math.max(row.h * 0.9, 0.005);
+            const indented = cur && row.x0 > cur.x0 + 0.02;
+            if (cur && gap <= limit && !indented) {
+              cur.text = (cur.text + ' ' + row.text).replace(/\s+/g, ' ').trim();
+              cur.x1 = Math.max(cur.x1, row.x1);
+              cur.bottom = row.y + row.h;
+              cur.gap = gap;
+            } else {
+              cur = {
+                id: hashId(row.text),
+                text: row.text,
+                x0: row.x0,
+                x1: row.x1,
+                y: row.y,
+                bottom: row.y + row.h,
+                gap: 0,
+              };
+              blocks.push(cur);
+            }
+            prev = row;
+          }
+          return blocks
+            .filter((b) => (b.text.match(/\p{L}/gu) || []).length >= 2)
+            .map((b, i) => ({
+              index: i,
+              id: b.id,
+              text: b.text,
+              rect: {
+                x: b.x0,
+                y: b.y,
+                w: Math.max(0.01, b.x1 - b.x0),
+                h: Math.max(0.004, b.bottom - b.y),
+              },
+            }));
+        }
+
+        /** 用识别结果替换这一页的文本层与段落 */
+        function applyOcr(pageNo, doc) {
+          ocrCache.set(pageNo, doc);
+          const el = pageEls[pageNo - 1];
+          if (!el) return;
+          buildOcrTextLayer(el, doc.words);
+          el._paras = doc.paragraphs.map((p, i) => ({
+            index: i,
+            id: hashId(p.text),
+            text: p.text,
+            rect: p.rect,
+          }));
+          el._stats = Object.assign({}, el._stats, {
+            items: doc.words.length,
+            ocr: true,
+            paras: el._paras.length,
+            conf: Math.round(doc.conf || 0),
+            sample: (el._paras[0] ? el._paras[0].text : '').slice(0, 100),
+          });
+          refreshTextStats();
+          if (pageNo === currentPage) notifyParagraphs();
+          paintHighlights(pageNo);
+        }
+
+        /** 重新统计「有文字 / 无文字」的页数（幂等，OCR 后再算一次也正确） */
+        function refreshTextStats() {
+          pagesWithText = pageEls.filter((p) => p._stats && p._stats.items > 0).length;
+          pagesWithoutText = pageEls.filter((p) => p._stats && p._stats.items <= 0).length;
+        }
+
+        /** 识别某一页；命中缓存直接返回 */
+        async function ocrPage(pageNo, lang, onProgress, psm) {
+          const useLang = lang || ocrLang;
+          const usePsm = psm || ocrPsm;
+          ocrLang = useLang;
+          ocrPsm = usePsm;
+          if (ocrCache.has(pageNo)) return ocrCache.get(pageNo);
+
+          // 带上管线版本号：清理/分段逻辑升级后，旧缓存自动失效
+          const key = bookId + ':' + pageNo + ':' + useLang + ':' + usePsm + ':v' + OCR_PIPELINE;
+          try {
+            const cached = await dbGet('ocr', key);
+            if (cached && cached.words && cached.words.length) {
+               const doc0 = {
+                words: cached.words,
+                paragraphs: filterOcrParagraphs(
+                  cached.paragraphs && cached.paragraphs.length ? cached.paragraphs : paragraphsFromWords(cached.words),
+                  cached.words,
+                ),
+                conf: cached.conf || 0,
+              };
+              applyOcr(pageNo, doc0);
+              return doc0;
+            }
+          } catch {
+            /* 缓存读失败就重新识别 */
+          }
+
+          const page = await doc.getPage(pageNo);
+          const canvas = await renderForOcr(page, ocrTargetWidth);
+          preprocessForOcr(canvas);
+
+          ocrProgressCb = onProgress || null;
+          try {
+            const worker = await getOcrWorker(useLang, usePsm);
+            // 要 TSV：一次拿到 块/段/行/词 的完整结构和置信度
+            const result = await worker.recognize(canvas, {}, { tsv: true });
+            const parsed = parseOcrTsv(result && result.data ? result.data.tsv : '', canvas.width, canvas.height);
+            const out = {
+              words: parsed.words,
+              paragraphs: parsed.paragraphs.length ? parsed.paragraphs : paragraphsFromWords(parsed.words),
+              conf: parsed.conf,
+            };
+            await dbPut('ocr', {
+              key,
+              bookId,
+              page: pageNo,
+              langs: useLang,
+              psm: usePsm,
+              words: out.words,
+              paragraphs: out.paragraphs,
+              conf: out.conf,
+              at: Date.now(),
+            });
+            applyOcr(pageNo, out);
+            return out;
+          } finally {
+            ocrProgressCb = null;
+          }
+        }
+
+        async function renderPage(pageNo) {
+          const el = pageEls[pageNo - 1];
+          if (!doc || !el || el.dataset.rendered === '1') return;
+          el.dataset.rendered = '1';
+
+          const page = await doc.getPage(pageNo);
+          const viewport = page.getViewport({ scale });
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const canvas = el.querySelector('canvas');
+          const ctx2d = canvas.getContext('2d');
+          canvas.width = Math.floor(viewport.width * dpr);
+          canvas.height = Math.floor(viewport.height * dpr);
+          canvas.style.width = viewport.width + 'px';
+          canvas.style.height = viewport.height + 'px';
+          el.style.width = viewport.width + 'px';
+          el.style.height = viewport.height + 'px';
+          await page.render({
+            canvasContext: ctx2d,
+            viewport,
+            transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+          }).promise;
+
+          // 文本层：让 PDF 里的文字可选，才能划词
+          const ocrWords = ocrCache.get(pageNo);
+          const textLayerEl = el.querySelector('.text-layer');
+          textLayerEl.innerHTML = '';
+          textLayerEl.style.width = viewport.width + 'px';
+          textLayerEl.style.height = viewport.height + 'px';
+          textLayerEl.style.setProperty('--scale-factor', String(viewport.scale));
+          textLayerEl.style.setProperty('--total-scale-factor', String(viewport.scale));
+          let textContent = null;
+
+          if (ocrWords && ocrWords.length) {
+            // 这一页已经 OCR 过：用识别结果直接当文本层
+            buildOcrTextLayer(el, ocrWords);
+            el._paras = paragraphsFromWords(ocrWords);
+          } else {
+            try {
+              textContent = await page.getTextContent();
+              if (typeof pdfjsLib.TextLayer === 'function') {
+                await new pdfjsLib.TextLayer({
+                  textContentSource: textContent,
+                  container: textLayerEl,
+                  viewport,
+                }).render();
+              } else if (typeof pdfjsLib.renderTextLayer === 'function') {
+                await pdfjsLib.renderTextLayer({
+                  textContentSource: textContent,
+                  container: textLayerEl,
+                  viewport,
+                  textDivs: [],
+                }).promise;
+              }
+            } catch (err) {
+              console.warn('[reader] 文本层渲染失败，这一页只能看、不能划词', err);
+            }
+            try {
+              el._paras = textContent ? extractParagraphs(textContent, viewport) : [];
+            } catch (err) {
+              console.warn('[reader] 段落切分失败', err);
+              el._paras = [];
+            }
+          }
+
+          el._stats = {
+            items: ocrWords && ocrWords.length ? ocrWords.length : textContent ? textContent.items.length : 0,
+            spans: textLayerEl.children.length,
+            ocr: !!(ocrWords && ocrWords.length),
+            paras: el._paras.length,
+            sample: (el._paras[0] ? el._paras[0].text : '').slice(0, 100),
+          };
+          refreshTextStats();
+          if (pageNo === currentPage) notifyParagraphs();
+          paintHighlights(pageNo);
+        }
+
+        function paintHighlights(pageNo) {
+          const el = pageEls[pageNo - 1];
+          if (!el) return;
+          const layer = el.querySelector('.hl-layer');
+          layer.innerHTML = '';
+          for (const h of highlights) {
+            if (h.location.page !== pageNo) continue;
+            for (const r of h.location.rects || []) {
+              const div = document.createElement('div');
+              div.className = 'hl-rect';
+              div.style.background = hlFill(h.color);
+              div.style.left = r.x * 100 + '%';
+              div.style.top = r.y * 100 + '%';
+              div.style.width = r.w * 100 + '%';
+              div.style.height = r.h * 100 + '%';
+              layer.appendChild(div);
+            }
+          }
+        }
+
+        /** 在页面上闪一下某一段的位置（侧栏点条目时用） */
+        function flashParagraph(pageNo, index) {
+          const el = pageEls[pageNo - 1];
+          const para = paragraphsOf(pageNo)[index];
+          if (!el || !para) return;
+          const div = document.createElement('div');
+          div.className = 'hl-flash';
+          div.style.left = para.rect.x * 100 + '%';
+          div.style.top = para.rect.y * 100 + '%';
+          div.style.width = para.rect.w * 100 + '%';
+          div.style.height = para.rect.h * 100 + '%';
+          el.appendChild(div);
+          setTimeout(() => {
+            div.style.opacity = '0';
+            setTimeout(() => div.remove(), 500);
+          }, 900);
+        }
+
+        function nearestPage() {
+          if (!host || !pageEls.length) return 1;
+          const mid = host.scrollTop + host.clientHeight / 2;
+          let best = 1;
+          let bestDist = Infinity;
+          pageEls.forEach((el, i) => {
+            const d = Math.abs(el.offsetTop + el.offsetHeight / 2 - mid);
+            if (d < bestDist) {
+              bestDist = d;
+              best = i + 1;
+            }
+          });
+          return best;
+        }
+
+        function scrollToPage(page) {
+          const el = pageEls[Math.max(0, Math.min(pageEls.length - 1, page - 1))];
+          if (!el || !host) return;
+          host.scrollTop = Math.max(0, el.offsetTop - 12);
+          if (page !== currentPage) {
+            currentPage = page;
+            notify();
+            notifyParagraphs();
+          }
+        }
+
+        /* ---- 悬停整段：做命中测试，而不是盖一层 div，这样不会挡住划词 ---- */
+        function onMouseMove(e) {
+          if (biMode !== 'hover') return;
+          const pageEl = e.target.closest ? e.target.closest('.pdf-page') : null;
+          if (!pageEl) return;
+          const pr = pageEl.getBoundingClientRect();
+          const nx = (e.clientX - pr.left) / pr.width;
+          const ny = (e.clientY - pr.top) / pr.height;
+          const pageNo = Number(pageEl.dataset.page);
+          const hit = paragraphsOf(pageNo).find(
+            (p) =>
+              ny >= p.rect.y &&
+              ny <= p.rect.y + p.rect.h &&
+              nx >= p.rect.x - 0.06 &&
+              nx <= p.rect.x + p.rect.w + 0.06,
+          );
+          const key = hit ? pageNo + ':' + hit.index : '';
+          if (key === hoverKey) return;
+          hoverKey = key;
+          if (!hit) return hoverCbs.forEach((cb) => cb(null));
+          hoverCbs.forEach((cb) =>
+            cb({
+              page: pageNo,
+              index: hit.index,
+              text: hit.text,
+              clientX: e.clientX,
+              clientY: e.clientY,
+              rect: {
+                left: pr.left + hit.rect.x * pr.width,
+                top: pr.top + hit.rect.y * pr.height,
+                width: hit.rect.w * pr.width,
+                height: hit.rect.h * pr.height,
+              },
+            }),
+          );
+        }
+        const onMouseLeave = () => {
+          if (!hoverKey) return;
+          hoverKey = '';
+          hoverCbs.forEach((cb) => cb(null));
+        };
+
+        /** 从当前选区构造统一的选中信息（自动弹出、右键弹出共用） */
+        function buildSelectionPayload() {
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed || !host) return null;
+          if (!sel.anchorNode || !host.contains(sel.anchorNode)) return null;
+          const text = sel.toString().replace(/\s+/g, ' ').trim();
+          if (!text) return null;
+          const range = sel.getRangeAt(0);
+          const node = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+          const pageEl = node && node.closest('.pdf-page');
+          if (!pageEl) return null;
+          const pageNo = Number(pageEl.dataset.page);
+          const pr = pageEl.getBoundingClientRect();
+          const rects = [];
+          for (const r of Array.from(range.getClientRects())) {
+            if (r.width < 1 || r.height < 1) continue;
+            rects.push({
+              x: (r.left - pr.left) / pr.width,
+              y: (r.top - pr.top) / pr.height,
+              w: r.width / pr.width,
+              h: r.height / pr.height,
+            });
+          }
+          const paras = paragraphsOf(pageNo);
+          const ny = rects.length ? rects[0].y : -1;
+          const para = ny >= 0
+            ? paras.find((p) => ny >= p.rect.y - 0.02 && ny <= p.rect.y + p.rect.h + 0.02)
+            : undefined;
+          return {
+            text,
+            context: para ? contextFor(para.text, text) : undefined,
+            rect: range.getBoundingClientRect(),
+            via: 'select',
+            location: {
+              bookId,
+              format,
+              page: pageNo,
+              rects,
+              percent: percentOf(pageNo),
+              excerpt: text.slice(0, 120),
+            },
+          };
+        }
+
+        function onMouseUp() {
+          if (selMenu !== 'auto') return;
+          setTimeout(() => {
+            const payload = buildSelectionPayload();
+            if (payload) selectCbs.forEach((cb) => cb(payload));
+          }, 10);
+        }
+
+        /** 右键弹出模式：只有真的选中了文字才接管右键，否则让浏览器菜单正常出现 */
+        function onContextMenu(e) {
+          if (selMenu !== 'context') return;
+          const payload = buildSelectionPayload();
+          if (!payload) return;
+          e.preventDefault();
+          payload.via = 'context';
+          payload.rect = new DOMRect(e.clientX, e.clientY, 0, 0); // 右键时贴着鼠标弹
+          selectCbs.forEach((cb) => cb(payload));
+        }
+
+        const onScroll = () => {
+          clearTimeout(scrollTimer);
+          scrollTimer = setTimeout(() => {
+            const p = nearestPage();
+            if (p !== currentPage) {
+              currentPage = p;
+              hoverKey = '';
+              notify();
+              notifyParagraphs();
+            }
+          }, 200);
+        };
+
+        /** 滚轮翻页模式：PDF 是一页页跳，而不是连续滚动 */
+        const onWheelPage = (e) => {
+          wheelHits++;
+          if (e.ctrlKey || e.metaKey) return; // Ctrl+滚轮留给外层做缩放
+          if (wheelMode !== 'page') {
+            scheduleSweep(); // 滚动模式下滚出新段落也要翻
+            return;
+          }
+          e.preventDefault();
+          if (Math.abs(e.deltaY) < 2) return;
+          const now = Date.now();
+          if (now < wheelLock) return;
+          wheelLock = now + 450;
+          scrollToPage(e.deltaY > 0 ? currentPage + 1 : currentPage - 1);
+        };
+
+        async function mount(el) {
+          host = el;
+          host.className = 'pdf-host';
+          host.innerHTML = '';
+          pageEls = [];
+          for (let i = 1; i <= doc.numPages; i++) {
+            const pageEl = document.createElement('div');
+            pageEl.className = 'pdf-page';
+            pageEl.dataset.page = String(i);
+            pageEl.style.height = '900px'; // 占位，避免渲染前滚动条乱跳
+            pageEl.innerHTML =
+              '<canvas class="pdf-canvas"></canvas><div class="text-layer"></div><div class="hl-layer"></div>';
+            host.appendChild(pageEl);
+            pageEls.push(pageEl);
+          }
+          observer = new IntersectionObserver(
+            (entries) => {
+              for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                renderPage(Number(entry.target.dataset.page)).catch((e) => console.warn(e));
+              }
+            },
+            { root: host, rootMargin: '800px 0px' },
+          );
+          pageEls.forEach((p) => observer.observe(p));
+          host.addEventListener('scroll', onScroll);
+          host.addEventListener('mouseup', onMouseUp);
+          host.addEventListener('mousemove', onMouseMove);
+          host.addEventListener('mouseleave', onMouseLeave);
+          host.addEventListener('wheel', onWheelPage, { passive: false });
+          host.addEventListener('contextmenu', onContextMenu);
+          notify();
+        }
+
+        async function goTo(location) {
+          if (location && location.page) scrollToPage(location.page);
+        }
+        async function goToPage(n) {
+          if (!doc) return;
+          scrollToPage(Math.max(1, Math.min(doc.numPages, Math.round(n))));
+        }
+        const next = async () => scrollToPage(currentPage + 1);
+        const prev = async () => scrollToPage(currentPage - 1);
+
+        function applyTheme(t) {
+          if (!t) return;
+          const wanted = baseScale * (t.fontSize / 100);
+          if (Math.abs(wanted - scale) < 0.001) return;
+          const anchor = nearestPage();
+          scale = wanted;
+          pageEls.forEach((el) => {
+            if (el.dataset.rendered === '1') {
+              delete el.dataset.rendered;
+              renderPage(Number(el.dataset.page)).catch((e) => console.warn(e));
+            }
+          });
+          scrollToPage(anchor);
+        }
+
+        return {
+          format,
+          open,
+          mount,
+          goTo,
+          next,
+          prev,
+          goToPage,
+          currentLocation,
+          applyTheme,
+          applyBilingual(mode) {
+            biMode = mode || 'off';
+            hoverKey = '';
+            if (biMode !== 'hover') hoverCbs.forEach((cb) => cb(null));
+          },
+          setWheelMode(mode) {
+            wheelMode = mode === 'page' ? 'page' : 'scroll';
+          },
+          setSelMenu(mode) {
+            selMenu = mode === 'context' || mode === 'off' ? mode : 'auto';
+          },
+          getCurrentParagraphs: () => ({ page: currentPage, items: paragraphsOf(currentPage) }),
+          textStats: () => ({ pagesWithText, pagesWithoutText }),
+          ocrPage,
+          setOcrLang(lang) {
+            ocrLang = lang || ocrLang;
+          },
+          setOcrPsm(value) {
+            ocrPsm = Number(value) || 3;
+          },
+          hasOcr: (pageNo) => ocrCache.has(pageNo),
+          debug: () => ({ format, currentPage, wheelMode, wheelHits, pagesWithText, pagesWithoutText }),
+          bilingualStats: () =>
+            pageEls
+              .filter((el) => el._stats)
+              .map((el) => Object.assign({ page: Number(el.dataset.page) }, el._stats)),
+          flashParagraph,
+          onParagraphs(cb) {
+            paraCbs.add(cb);
+          },
+          onParagraphHover(cb) {
+            hoverCbs.add(cb);
+          },
+          setHighlights(items) {
+            highlights = items || [];
+            pageEls.forEach((el) => {
+              if (el.dataset.rendered === '1') paintHighlights(Number(el.dataset.page));
+            });
+          },
+          onSelect(cb) {
+            selectCbs.add(cb);
+          },
+          onLocationChange(cb) {
+            locCbs.add(cb);
+          },
+          destroy() {
+            if (observer) observer.disconnect();
+            if (host) {
+              host.removeEventListener('scroll', onScroll);
+              host.removeEventListener('mouseup', onMouseUp);
+              host.removeEventListener('mousemove', onMouseMove);
+              host.removeEventListener('mouseleave', onMouseLeave);
+              host.removeEventListener('wheel', onWheelPage);
+              host.removeEventListener('contextmenu', onContextMenu);
+            }
+            // 释放 OCR worker（它常驻着语言模型）
+            if (ocrWorker) {
+              try {
+                ocrWorker.terminate();
+              } catch {
+                /* ignore */
+              }
+              ocrWorker = null;
+              ocrWorkerLang = '';
+            }
+            if (doc) doc.destroy();
+            doc = null;
+            host = null;
+            pageEls = [];
+          },
+        };
+      }
+
+      /* =====================================================================
+       * 6. EPUB 适配器
+       *    章节渲染在 iframe 里，中文译文作为 .xlate 节点插到每段正文之后，
+       *    随正文排版、字号、主题一起走。
+       *
+       *    翻译按「可见才翻」推进：只有离视口两三屏以内的段落会去请求，
+       *    关掉对照后不再产生新请求（等于停止消耗）。
+       * ================================================================== */
+      function createEpubAdapter() {
+        const format = 'epub';
+        const BLOCK_SELECTOR = 'p, li, blockquote, h1, h2, h3, h4, h5, h6, td';
+        let book = null;
+        let rendition = null;
+        let host = null;
+        let bookId = '';
+        let percent = 0;
+        let cfi = null;
+        let biMode = 'off';
+        let highlights = [];
+        let appliedRanges = [];
+        let themeState = { fontSize: 100, theme: 'light' };
+        let wheelMode = 'scroll';
+        let wheelCb = null;
+        let wheelLock = 0;
+        let wheelHits = 0;
+        const wheelBoundWindows = new WeakSet();
+        let flowMode = 'scrolled-continuous'; // 默认：全文上下连续滚动（不是每章一个框）
+        let selMenu = 'auto';
+        let tapCb = null;
+        const tapBoundWindows = new WeakSet();
+        let totalPages = 0; // 由 book.locations.generate 之后算出，用于页码显示与跳页
+        const contentsList = new Set();
+        const selectCbs = new Set();
+        const locCbs = new Set();
+
+        async function currentLocation() {
+          const total = totalPages || 0;
+          const pageNo = total ? Math.max(1, Math.min(total, Math.round(percent * total))) : 0;
+          return { bookId, format, cfi: cfi || undefined, pageNo, pageTotal: total, percent, excerpt: '' };
+        }
+
+        function flattenToc(nodes, depth, ctx) {
+          const out = [];
+          for (const node of nodes) {
+            if (node.href) {
+              out.push({
+                label: String(node.label || '').trim() || node.href,
+                depth,
+                location: { bookId: ctx.bookId, format, cfi: node.href, percent: 0, excerpt: '' },
+              });
+            }
+            if (node.subitems && node.subitems.length) out.push(...flattenToc(node.subitems, depth + 1, ctx));
+          }
+          return out;
+        }
+
+        function percentFromCfi(value) {
+          try {
+            const p = book.locations.percentageFromCfi(value);
+            return typeof p === 'number' && !Number.isNaN(p) ? p : 0;
+          } catch {
+            return 0;
+          }
+        }
+
+        async function open(source, ctx) {
+          if (typeof window.ePub !== 'function') {
+            const why = deps.failures.slice(-3).join('；');
+            throw new Error('epub.js 没加载成功，EPUB 打不开。' + (why ? '（' + why + '）' : ''));
+          }
+          if (typeof window.JSZip !== 'function') {
+            const why = deps.failures.slice(-3).join('；');
+            throw new Error('jszip 没加载成功，EPUB 解压不了（epub.js 依赖它）。' + (why ? '（' + why + '）' : ''));
+          }
+          bookId = ctx.bookId;
+          const buffer = await source.arrayBuffer();
+          // epub.js 对输入类型比较挑：先用 ArrayBuffer 试，失败再用 Blob 试一次
+          let lastError = null;
+          for (const input of [buffer, new Blob([buffer], { type: 'application/epub+zip' })]) {
+            try {
+              book = window.ePub(input);
+              await book.ready;
+              lastError = null;
+              break;
+            } catch (err) {
+              lastError = err;
+              book = null;
+            }
+          }
+          if (lastError) {
+            throw new Error(
+              '这个 EPUB 打不开：' + ((lastError && lastError.message) || String(lastError)) +
+                '（常见原因：文件带 DRM 加密、文件损坏，或它其实不是真正的 EPUB）',
+            );
+          }
+          const meta = (book.packaging && book.packaging.metadata) || {};
+          return {
+            meta: { id: bookId, title: meta.title || ctx.title, author: meta.creator, format, size: source.size },
+            toc: flattenToc((book.navigation && book.navigation.toc) || [], 0, ctx),
+          };
+        }
+
+        /* ---------- 译文节点 ---------- */
+        const X_STYLE = `
+          .xlate {
+            display: block; margin: 6px 0 16px; padding: 2px 0 2px 11px;
+            border-left: 3px solid #6f92f7; color: #2f4f8f;
+            font-size: .9em; line-height: 1.75;
+          }
+          .xlate[data-state="loading"] { color: #9aa1b1; font-style: italic; border-left-color: #d6dae2; }
+          .xlate[data-state="error"] { color: #d33; border-left-color: #d33; cursor: pointer; font-size: .85em; }
+          html[data-rd-theme="dark"] .xlate { color: #9fc0ff; }
+          html[data-rd-theme="sepia"] .xlate { color: #7a5220; }
+          ::selection { background: var(--rd-sel, rgba(72,128,255,.35)); }
+          .epubjs-hl { mix-blend-mode: multiply; }
+          html[data-rd-hide="1"] .xlate { display: none; }
+          html[data-rd-hover="1"] .xlate { display: none; }
+          html[data-rd-hover="1"] *:hover > .xlate { display: block; }
+        `;
+
+        function prepareDoc(contents) {
+          const doc = contents && contents.document;
+          if (!doc || !doc.head) return null;
+          if (!doc.getElementById('rd-bi-style')) {
+            const style = doc.createElement('style');
+            style.id = 'rd-bi-style';
+            style.textContent = X_STYLE;
+            doc.head.appendChild(style);
+          }
+          applyDocFlags(doc);
+          // iframe 内部的滚轮不会冒泡到外层文档，所以要在里面单独接管。
+          // 去重必须按 window 而不是 document：同一个文档对象可能对应多个 Contents，
+          // 用 document 做标记会把监听器绑在过期窗口上，真窗口反而收不到事件。
+          const win = contents.window;
+          if (win && !wheelBoundWindows.has(win)) {
+            wheelBoundWindows.add(win);
+            doc.documentElement.dataset.rdWheel = '1';
+            win.addEventListener('wheel', onInnerWheel, { passive: false });
+          }
+          if (win && !tapBoundWindows.has(win)) {
+            tapBoundWindows.add(win);
+            // 点空白处收起划选菜单
+            doc.addEventListener('mousedown', () => {
+              if (tapCb) tapCb();
+            });
+            // 滚动到新内容时补翻译文
+            win.addEventListener('scroll', scheduleSweep, { passive: true });
+            // 右键弹出模式
+            doc.addEventListener('contextmenu', (e) => {
+              if (selMenu !== 'context') return;
+              const payload = selectionFromContents(contents);
+              if (!payload) return; // 没选中文字就让浏览器右键菜单正常出现
+              e.preventDefault();
+              const live = host ? host.querySelector('iframe') : null;
+              const off = live ? live.getBoundingClientRect() : { left: 0, top: 0 };
+              payload.via = 'context';
+              payload.rect = { left: e.clientX + off.left, top: e.clientY + off.top, width: 0, height: 0 };
+              selectCbs.forEach((cb) => cb(payload));
+            });
+          }
+          return doc;
+        }
+
+        /** 从 iframe 里的选区构造选中信息。cfiRange 可传可不传（右键路径需要自己算 CFI）。 */
+        function selectionFromContents(contents, cfiRange) {
+          let text = '';
+          let rect = { left: window.innerWidth / 2 - 160, top: 90, width: 320, height: 0 };
+          let context;
+          let range = null;
+          try {
+            const sel = contents.window.getSelection();
+            if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+            text = String(sel).replace(/\s+/g, ' ').trim();
+            if (!text) return null;
+            range = sel.getRangeAt(0);
+            const r = range.getBoundingClientRect();
+            const live = host ? host.querySelector('iframe') : null;
+            const off = live ? live.getBoundingClientRect() : { left: 0, top: 0 };
+            rect = { left: r.left + off.left, top: r.top + off.top, width: r.width, height: r.height };
+            const node = range.startContainer;
+            const block = node.nodeType === 1 ? node : node.parentElement;
+            const para = block && block.closest('[data-rd-text]');
+            context = para ? contextFor(para.dataset.rdText || '', text) : undefined;
+          } catch {
+            return null;
+          }
+          if (!cfiRange && range) {
+            try {
+              cfiRange = contents.cfiFromRange(range);
+            } catch {
+              cfiRange = '';
+            }
+          }
+          return {
+            text,
+            context,
+            rect,
+            via: 'select',
+            location: { bookId, format, cfi: cfiRange || undefined, percent, excerpt: text.slice(0, 120) },
+          };
+        }
+
+        function onInnerWheel(e) {
+          wheelHits++;
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            if (wheelCb) wheelCb(e.deltaY);
+            return;
+          }
+          if (wheelMode !== 'page') return;
+          e.preventDefault();
+          pageTurn(e.deltaY);
+        }
+
+        function pageTurn(deltaY) {
+          const now = Date.now();
+          if (now < wheelLock) return;
+          wheelLock = now + 450;
+          if (deltaY > 0) next();
+          else prev();
+        }
+
+        function applyDocFlags(doc) {
+          if (!doc || !doc.documentElement) return;
+          const root = doc.documentElement;
+          root.dataset.rdTheme = themeState.theme;
+          root.style.setProperty('--rd-sel', state.selColor);
+          if (biMode === 'off') {
+            root.dataset.rdHide = '1';
+            delete root.dataset.rdHover;
+          } else {
+            delete root.dataset.rdHide;
+            if (biMode === 'hover') root.dataset.rdHover = '1';
+            else delete root.dataset.rdHover;
+          }
+        }
+
+        async function translateBlock(el, box) {
+          const text = el.dataset.rdText || '';
+          if (!text || box.dataset.state === 'ok' || box.dataset.state === 'loading') return;
+          box.dataset.state = 'loading';
+          box.textContent = '翻译中…';
+          try {
+            const zh = await translate(text);
+            box.textContent = zh;
+            box.dataset.state = 'ok';
+          } catch (err) {
+            box.dataset.state = 'error';
+            box.textContent = '翻译失败：' + (err && err.message ? err.message : String(err)) + '（点这里重试）';
+          }
+        }
+
+        /** 给这一章的每个正文块挂上译文占位，并用 IntersectionObserver 做「可见才翻」 */
+        /**
+         * 「看得见才翻译」：翻页/滚动后扫一遍视口附近的段落。
+         * 不依赖 iframe 里的 IntersectionObserver —— 它在不同内核/沙箱下表现不一致，
+         * 有的环境里干脆没有这个构造函数。
+         */
+        function sweepVisible(contents) {
+          const doc = contents && contents.document;
+          if (!doc || biMode === 'off') return;
+          const win = contents.window || {};
+          const vw = win.innerWidth || 900;
+          const vh = win.innerHeight || 700;
+          let budget = 24; // 一次最多挑这么多段，避免一页塞进太多请求
+          for (const el of doc.querySelectorAll('[data-rd-key]')) {
+            if (budget <= 0) break;
+            const box = el.querySelector(':scope > .xlate');
+            if (!box || box.dataset.state === 'ok' || box.dataset.state === 'loading') continue;
+            let rect;
+            try {
+              rect = el.getBoundingClientRect();
+            } catch {
+              continue;
+            }
+            const near =
+              rect.right > -vw * 0.5 && rect.left < vw * 1.5 && rect.bottom > -vh * 0.5 && rect.top < vh * 1.5;
+            if (!near) continue;
+            budget--;
+            translateBlock(el, box);
+          }
+        }
+
+        let sweepTimer = null;
+        function scheduleSweep() {
+          clearTimeout(sweepTimer);
+          sweepTimer = setTimeout(() => {
+            contentsList.forEach(sweepVisible);
+            syncFromRendition();
+          }, 120);
+        }
+
+        /**
+         * 连续滚动时 epub.js 不一定发 relocated，所以滚动后自己问一次当前位置：
+         * 否则顶部的页码 / 百分比会在滚动时卡住不动。
+         */
+        async function syncFromRendition() {
+          if (!rendition || !book) return;
+          try {
+            const loc = await rendition.currentLocation();
+            const live = loc && loc.start ? loc.start.cfi : null;
+            if (live && live !== cfi) {
+              cfi = live;
+              percent = percentFromCfi(live);
+              const payload = await currentLocation();
+              locCbs.forEach((cb) => cb(payload));
+            }
+          } catch {
+            /* 拿不到就保持原值 */
+          }
+        }
+
+        function instrument(contents) {
+          const doc = prepareDoc(contents);
+          if (!doc || biMode === 'off') return;
+          const blocks = Array.from(doc.querySelectorAll(BLOCK_SELECTOR));
+          for (const el of blocks) {
+            if (el.dataset.rdKey || el.closest('.xlate')) continue;
+            // 块里还套着块（例如 li > p）时只处理最外层，避免同一段出现两条译文
+            if (el.querySelector(BLOCK_SELECTOR)) continue;
+            const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+            // 用 Unicode 字母判断，别写死 [A-Za-z]：中文、日文、俄文段落都该被翻译
+            if (text.length < 2 || !/\p{L}/u.test(text) || text.length > 4000) continue;
+            if (el.querySelector(':scope > .xlate')) continue;
+
+            el.dataset.rdKey = hashId(text);
+            el.dataset.rdText = text;
+            const box = doc.createElement('div');
+            box.className = 'xlate';
+            box.dataset.state = 'idle';
+            box.textContent = '⋯';
+            el.appendChild(box);
+          }
+          sweepVisible(contents);
+
+          doc.addEventListener('mouseover', (e) => {
+            if (biMode !== 'hover') return;
+            const target = e.target;
+            const el = target && target.closest ? target.closest('[data-rd-key]') : null;
+            if (!el) return;
+            const box = el.querySelector(':scope > .xlate');
+            if (box) translateBlock(el, box);
+          });
+          doc.addEventListener('click', (e) => {
+            const box = e.target && e.target.classList && e.target.classList.contains('xlate') ? e.target : null;
+            if (!box || box.dataset.state !== 'error') return;
+            const el = box.parentElement;
+            if (el) translateBlock(el, box);
+          });
+        }
+
+        function handleContents(contents) {
+          if (!contents) return;
+          contentsList.add(contents);
+          instrument(contents);
+        }
+
+        /** rendition.getContents() 是权威来源：即使 'rendered' 事件没触发也能补上 */
+        function syncContents() {
+          if (!rendition) return;
+          try {
+            rendition.getContents().forEach((c) => c && contentsList.add(c));
+          } catch {
+            /* 拿不到就算了 */
+          }
+        }
+
+        function applyBilingual(mode) {
+          biMode = mode || 'off';
+          syncContents();
+          for (const contents of contentsList) {
+            const doc = prepareDoc(contents);
+            if (!doc) continue;
+            if (biMode !== 'off') instrument(contents);
+          }
+        }
+
+        /* ---------- 主题 / 高亮 ---------- */
+        function applyTheme(t) {
+          if (!t) return;
+          themeState = { fontSize: t.fontSize, theme: t.theme, lineHeight: t.lineHeight, bg: t.bg || '' };
+          if (!rendition) return;
+          rendition.themes.fontSize(t.fontSize + '%');
+          const dark = t.theme === 'dark';
+          rendition.themes.override('color', dark ? '#e8e9ee' : '#1b1d22', true);
+          rendition.themes.override('background', t.bg || (dark ? '#1f232b' : 'transparent'), true);
+          rendition.themes.override('line-height', String(t.lineHeight || 1.9), true);
+          contentsList.forEach((c) => applyDocFlags(c.document));
+        }
+
+        function applyHighlights() {
+          if (!rendition) return;
+          for (const r of appliedRanges) {
+            try {
+              rendition.annotations.remove(r, 'highlight');
+            } catch {
+              /* 已经不在了 */
+            }
+          }
+          appliedRanges = [];
+          for (const h of highlights) {
+            const range = h.location && h.location.cfi;
+            if (!range) continue;
+            try {
+              rendition.annotations.highlight(range, {}, undefined, 'hl', {
+                fill: hlFill(h.color),
+                'fill-opacity': '1',
+                'mix-blend-mode': 'multiply',
+              });
+              appliedRanges.push(range);
+            } catch (err) {
+              console.warn('[reader] EPUB 高亮失败', err);
+            }
+          }
+        }
+
+        async function mount(el) {
+          host = el;
+          host.className = 'epub-host';
+          host.innerHTML = '';
+          // flow：scrolled-doc = 上下连贯滚动（默认），paginated = 分页
+          rendition = book.renderTo(host, { width: '100%', height: '100%', flow: flowMode, spread: 'none' });
+          host.addEventListener('scroll', scheduleSweep, { passive: true });
+          applyTheme(themeState);
+
+          rendition.on('relocated', (loc) => {
+            try {
+              cfi = (loc && loc.start && loc.start.cfi) || cfi;
+              percent = cfi ? percentFromCfi(cfi) : percent;
+              currentLocation().then((l) => locCbs.forEach((cb) => cb(l)));
+            } catch (err) {
+              console.warn(err);
+            }
+            scheduleSweep();
+          });
+          rendition.on('rendered', (section, view) => handleContents(view));
+
+          rendition.on('selected', (cfiRange, contents) => {
+            if (selMenu !== 'auto') return;
+            const payload = selectionFromContents(contents, cfiRange);
+            if (payload) selectCbs.forEach((cb) => cb(payload));
+          });
+
+          await rendition.display(cfi || undefined);
+          rendition.getContents().forEach(handleContents);
+          applyHighlights();
+          book.locations
+            .generate(600)
+            .then(() => {
+              totalPages = book.locations.total || (book.locations._locations ? book.locations._locations.length : 0);
+              if (cfi) {
+                percent = percentFromCfi(cfi);
+              }
+              currentLocation().then((l) => locCbs.forEach((cb) => cb(l)));
+            })
+            .catch(() => {});
+        }
+
+        async function goTo(location) {
+          const target = location && (location.cfi || location.href);
+          if (target) await rendition.display(target);
+        }
+        async function goToPage(n) {
+          if (!book || !book.locations || !totalPages) return;
+          const frac = Math.max(0, Math.min(0.999, n / totalPages));
+          try {
+            const target = book.locations.cfiFromPercentage(frac);
+            if (target) await rendition.display(target);
+          } catch (err) {
+            console.warn('[reader] 跳页失败', err);
+          }
+        }
+        const next = async () => {
+          await rendition.next();
+        };
+        const prev = async () => {
+          await rendition.prev();
+        };
+
+        return {
+          format,
+          open,
+          mount,
+          goTo,
+          next,
+          prev,
+          currentLocation,
+          applyTheme,
+          applyBilingual,
+          goToPage,
+          setContentWidth(px) {
+            if (!host) return;
+            host.style.width = px ? px + 'px' : '';
+            host.style.margin = px ? '0 auto' : '';
+            if (rendition && typeof rendition.resize === 'function') {
+              try {
+                rendition.resize(host.clientWidth, host.clientHeight);
+              } catch (err) {
+                console.warn('[reader] EPUB resize 失败', err);
+              }
+            }
+          },
+          setWheelMode(mode) {
+            wheelMode = mode === 'page' ? 'page' : 'scroll';
+          },
+          /** 布局变化后（开关侧栏、缩放、窗口尺寸）重新量一次，避免容器比可视区高出一截 */
+          relayout() {
+            if (!rendition || !host || typeof rendition.resize !== 'function') return;
+            try {
+              rendition.resize(host.clientWidth, host.clientHeight);
+            } catch (err) {
+              console.warn('[reader] relayout 失败', err);
+            }
+          },
+          onWheel(cb) {
+            wheelCb = cb;
+          },
+          setFlow(mode) {
+            flowMode = mode === 'page' ? 'paginated' : 'scrolled-continuous';
+            if (!rendition) return;
+            const at = cfi;
+            try {
+              if (typeof rendition.flow === 'function') rendition.flow(flowMode);
+              if (at) rendition.display(at).catch(() => {});
+              scheduleSweep();
+            } catch (err) {
+              console.warn('[reader] 切换排版失败', err);
+            }
+          },
+          setSelMenu(mode) {
+            selMenu = mode === 'context' || mode === 'off' ? mode : 'auto';
+          },
+          onTap(cb) {
+            tapCb = cb;
+          },
+          debug: () => ({ format, wheelMode, flowMode, selMenu, wheelHits, contents: contentsList.size }),
+          bilingualStats() {
+            const out = [];
+            for (const contents of contentsList) {
+              try {
+                const doc = contents.document;
+                const all = doc ? Array.from(doc.querySelectorAll(BLOCK_SELECTOR)) : [];
+                const innermost = all.filter((el) => !el.querySelector(BLOCK_SELECTOR));
+                out.push({
+                  blocks: doc ? doc.querySelectorAll(BLOCK_SELECTOR).length : -1,
+                  innermost: innermost.length,
+                  withBox: innermost.filter((el) => el.querySelector(':scope > .xlate')).length,
+                  tags: innermost.slice(0, 12).map((el) => el.tagName.toLowerCase()),
+                  xlate: doc ? doc.querySelectorAll('.xlate').length : -1,
+                  ok: doc ? doc.querySelectorAll('.xlate[data-state="ok"]').length : -1,
+                  loading: doc ? doc.querySelectorAll('.xlate[data-state="loading"]').length : -1,
+                  err: doc ? doc.querySelectorAll('.xlate[data-state="error"]').length : -1,
+                  wheelReady: doc ? !!doc.documentElement.dataset.rdWheel : false,
+                  wheelHits,
+                  ioWindow:
+                    contents.window && typeof contents.window.IntersectionObserver === 'function',
+                  isLive: !!(
+                    host &&
+                    host.querySelector('iframe') &&
+                    contents.window === host.querySelector('iframe').contentWindow
+                  ),
+                  bound: !!contents.window && wheelBoundWindows.has(contents.window),
+                  docUrl: doc ? String(doc.URL || '').slice(0, 60) : null,
+                  first: doc ? String((doc.querySelector('.xlate') || {}).textContent || '').slice(0, 80) : null,
+                });
+              } catch (error) {
+                out.push({ error: String(error) });
+              }
+            }
+            return out;
+          },
+          setHighlights(items) {
+            highlights = items || [];
+            applyHighlights();
+          },
+          onSelect(cb) {
+            selectCbs.add(cb);
+          },
+          onLocationChange(cb) {
+            locCbs.add(cb);
+          },
+          destroy() {
+            contentsList.clear();
+            if (rendition) rendition.destroy();
+            if (book) book.destroy();
+            rendition = null;
+            book = null;
+            if (host) host.innerHTML = '';
+            host = null;
+          },
+        };
+      }
+
+      /* =====================================================================
+       * 7. 界面
+       * ================================================================== */
+      // ?reset=1：清掉阅读偏好回到默认值。必须在建 state 之前跑，否则本次加载读到的还是旧值。
+      if (/[?&]reset=1/.test(location.search)) {
+        for (const key of [
+          'reader.fontSize', 'reader.width', 'reader.side', 'reader.bg', 'reader.sel',
+          'reader.hl', 'reader.theme', 'reader.flow', 'reader.selmenu', 'reader.line', 'reader.bi2',
+        ]) {
+          localStorage.removeItem(key);
+        }
+      }
+
+      const state = {
+        books: [],
+        book: null,
+        adapter: null,
+        toc: [],
+        highlights: [],
+        vocab: [],
+        paragraphs: [], // 当前页段落（PDF）
+        paraPage: 0,
+        panel: null, // 'bi' | 'toc' | 'highlights' | 'vocab'
+        pending: null,
+        noTextLayer: false, // 扫描版 PDF 标记
+        ocrLang: localStorage.getItem('reader.ocrlang') || 'eng+chi_sim',
+        ocrPsm: Number(localStorage.getItem('reader.ocrpsm') || 3),
+        ocrAuto: localStorage.getItem('reader.ocrauto') === '1',
+        ocrBusy: false,
+        ocrStatus: '',
+        biMode: localStorage.getItem('reader.bi2') || 'off', // v2 键：保证默认是「关」
+        theme: localStorage.getItem('reader.theme') || 'light',
+        fontSize: Number(localStorage.getItem('reader.fontSize') || 100),
+        lineHeight: Number(localStorage.getItem('reader.line') || 1.9),
+        selMenu: localStorage.getItem('reader.selmenu') || 'auto', // 'auto' | 'context' | 'off'
+        contentWidth: Number(localStorage.getItem('reader.width') || 0), // EPUB 栏宽 px，0 = 自动
+        bg: localStorage.getItem('reader.bg') || '',
+        selColor: localStorage.getItem('reader.sel') || 'rgba(72,128,255,.35)',
+        hlColor: localStorage.getItem('reader.hl') || '#ffd666',
+        // 'scroll' = 上下连贯滚动（默认）；'page' = 分页，滚轮/按钮翻页
+        wheelMode: localStorage.getItem('reader.flow') || 'scroll',
+        sideWidth: Number(localStorage.getItem('reader.side') || 340),
+        panelTab: localStorage.getItem('reader.paneltab') || '', // 记住上次看的侧栏页签
+      };
+      document.documentElement.dataset.theme = state.theme;
+      loadSettings();
+
+      /* ---------------- 外观：背景 / 选区色 / 高亮色 / 栏宽 / 滚轮 ---------------- */
+      const THEME_NAMES = { light: '浅色', sepia: '米色', dark: '深色' };
+      const SEL_MENU_NAMES = { auto: '自动弹出', context: '右键弹出', off: '禁止弹出' };
+      let hudTimer = null;
+
+      function hud(msg) {
+        const el = $('#hud');
+        el.textContent = msg;
+        el.hidden = false;
+        clearTimeout(hudTimer);
+        hudTimer = setTimeout(() => (el.hidden = true), 1200);
+      }
+
+      function applyAppearance() {
+        const root = document.documentElement;
+        if (state.bg) root.style.setProperty('--reader-bg', state.bg);
+        else root.style.removeProperty('--reader-bg');
+        root.style.setProperty('--sel', state.selColor);
+        root.style.setProperty('--side-w', state.sideWidth + 'px');
+
+        const isPdf = !!(state.book && state.book.format === 'pdf');
+        $('#look-font').textContent = state.fontSize + '%';
+        $('#look-width').textContent = state.contentWidth ? state.contentWidth + 'px' : '自动';
+        $('#look-line').textContent = state.lineHeight.toFixed(1);
+        $('#look-selmenu').textContent = SEL_MENU_NAMES[state.selMenu] || state.selMenu;
+        $('#btn-theme').textContent = THEME_NAMES[state.theme] || state.theme;
+        $('#btn-flow').textContent = state.wheelMode === 'page' ? '分页翻页' : '上下滚动';
+        $('#look-flow-hint').textContent =
+          state.wheelMode === 'page' ? '滚轮 = 上/下一页' : '滚轮 = 连续滚动（连贯阅读）';
+        $('#look-width-row').style.opacity = isPdf ? '0.45' : '1';
+
+        for (const el of document.querySelectorAll('[data-bg]')) {
+          el.setAttribute('aria-pressed', String((el.dataset.bg || '') === state.bg));
+        }
+        for (const el of document.querySelectorAll('[data-sel]')) {
+          el.setAttribute('aria-pressed', String(el.dataset.sel === state.selColor));
+        }
+        for (const el of document.querySelectorAll('[data-hl]')) {
+          el.setAttribute('aria-pressed', String(el.dataset.hl === state.hlColor));
+        }
+
+        if (state.adapter) {
+          state.adapter.applyTheme({
+            fontSize: state.fontSize,
+            theme: state.theme,
+            lineHeight: state.lineHeight,
+            bg: state.bg,
+          });
+          if (state.adapter.setContentWidth) state.adapter.setContentWidth(isPdf ? 0 : state.contentWidth);
+          if (state.adapter.setWheelMode) state.adapter.setWheelMode(state.wheelMode);
+          if (state.adapter.setFlow) state.adapter.setFlow(state.wheelMode);
+          if (state.adapter.setSelMenu) state.adapter.setSelMenu(state.selMenu);
+        }
+        paintAllHighlights();
+      }
+
+      /* ---------------- 顶部页码 ---------------- */
+      const pageInput = $('#page-input');
+      let pageTyping = false;
+
+      function updatePageUi(loc) {
+        if (!loc) return;
+        const total = loc.pageTotal || 0;
+        const no = loc.pageNo || 0;
+        $('#page-total').textContent = total ? '/ ' + total : '/ --';
+        if (!pageTyping) pageInput.value = no ? String(no) : '';
+      }
+
+      pageInput.addEventListener('focus', () => {
+        pageTyping = true;
+        pageInput.select();
+      });
+      pageInput.addEventListener('blur', () => {
+        pageTyping = false;
+        if (state.adapter && state.adapter.currentLocation) {
+          state.adapter.currentLocation().then(updatePageUi).catch(() => {});
+        }
+      });
+      pageInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const n = parseInt(pageInput.value, 10);
+        pageInput.blur();
+        if (!Number.isFinite(n) || !state.adapter || !state.adapter.goToPage) return;
+        state.adapter.goToPage(n);
+      });
+
+      function setLineHeight(v) {
+        state.lineHeight = Math.max(1.2, Math.min(2.6, Math.round(v * 10) / 10));
+        localStorage.setItem('reader.line', String(state.lineHeight));
+        applyAppearance();
+        hud('行距 ' + state.lineHeight.toFixed(1));
+      }
+
+      /** 恢复默认外观 / 阅读设置 */
+      function resetAppearance() {
+        for (const key of [
+          'reader.fontSize', 'reader.width', 'reader.side', 'reader.bg', 'reader.sel',
+          'reader.hl', 'reader.theme', 'reader.flow', 'reader.selmenu', 'reader.line', 'reader.bi2',
+        ]) {
+          localStorage.removeItem(key);
+        }
+        Object.assign(state, {
+          fontSize: 100,
+          contentWidth: 0,
+          sideWidth: 340,
+          bg: '',
+          selColor: 'rgba(72,128,255,.35)',
+          hlColor: '#ffd666',
+          theme: 'light',
+          wheelMode: 'scroll',
+          selMenu: 'auto',
+          lineHeight: 1.9,
+          biMode: 'off',
+        });
+        document.documentElement.dataset.theme = state.theme;
+        applyAppearance();
+        applyBiMode(state.biMode);
+        hud('已恢复默认设置');
+      }
+
+      function setSelMenu(mode) {
+        state.selMenu = ['auto', 'context', 'off'].includes(mode) ? mode : 'auto';
+        localStorage.setItem('reader.selmenu', state.selMenu);
+        if (state.selMenu !== 'auto') closePopover();
+        applyAppearance();
+        hud('划选菜单：' + (SEL_MENU_NAMES[state.selMenu] || state.selMenu));
+      }
+
+      function setContentWidth(px) {
+        state.contentWidth = Math.max(0, Math.min(1600, Math.round(px / 20) * 20));
+        localStorage.setItem('reader.width', String(state.contentWidth));
+        applyAppearance();
+        hud('栏宽 ' + (state.contentWidth ? state.contentWidth + 'px' : '自动'));
+      }
+
+      function setWheelMode(mode) {
+        state.wheelMode = mode === 'page' ? 'page' : 'scroll';
+        localStorage.setItem('reader.flow', state.wheelMode);
+        applyAppearance();
+        hud(state.wheelMode === 'page' ? '分页：滚轮翻页' : '上下连贯滚动');
+      }
+
+      function setBg(color) {
+        state.bg = color || '';
+        localStorage.setItem('reader.bg', state.bg);
+        applyAppearance();
+      }
+
+      function setSelColor(color) {
+        state.selColor = color;
+        localStorage.setItem('reader.sel', color);
+        applyAppearance();
+      }
+
+      function setHlColor(color) {
+        state.hlColor = color;
+        localStorage.setItem('reader.hl', color);
+        applyAppearance();
+        hud('高亮色已设为默认');
+      }
+
+      /* ---------------- 依赖状态 ---------------- */
+      function renderDepsStatus() {
+        const box = $('#dep-status');
+        if (!box) return;
+        const bad = [];
+        if (!deps.pdfBase) bad.push('pdf.js 没加载成功 —— PDF 打不开');
+        if (!deps.epubUrl) bad.push('epub.js 没加载成功 —— EPUB 打不开');
+        if (!deps.jszipUrl) bad.push('jszip 没加载成功 —— EPUB 解压不了（epub.js 依赖它）');
+        if (!bad.length) {
+          box.hidden = true;
+          return;
+        }
+        box.hidden = false;
+        box.innerHTML =
+          '<div class="notice-title">有依赖没加载成功</div>' +
+          '<div class="notice-body">' +
+          bad.map(esc).join('<br />') +
+          '<br /><br />最常见的原因是当前网络访问不到这些 CDN（jsdelivr 在国内经常不稳）。' +
+          '可以换网络或挂代理后刷新重试；也可以把库文件下载到本地，改用本地路径。</div>' +
+          '<details><summary>失败详情</summary><pre>' +
+          esc(deps.failures.join('\n') || '（没有更详细的信息）') +
+          '</pre></details>' +
+          '<button class="btn small" id="btn-deps-retry">重新加载</button>';
+        $('#btn-deps-retry').addEventListener('click', () => location.reload());
+        diag('deps-degraded', { pdf: deps.pdfBase, epub: deps.epubUrl, failures: deps.failures });
+      }
+
+      /* ---------------- 书架 ---------------- */
+      async function refreshBooks() {
+        state.books = (await dbAll('books')).sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+        renderLibrary();
+      }
+
+      function renderLibrary() {
+        const grid = $('#book-grid');
+        if (!state.books.length) {
+          grid.innerHTML =
+            '<div class="empty">还没有书。点右上角「导入 PDF / EPUB」，或者把文件拖进这个窗口。<br />' +
+            '导入后即可阅读英文原文，中文译文按段落对照显示。</div>';
+          return;
+        }
+        grid.innerHTML = state.books
+          .map((b) => {
+            const pct = Math.round((b.percent || 0) * 100);
+            return (
+              '<article class="card" data-open="' + b.id + '">' +
+              '<button class="del" data-del="' + b.id + '" title="移除">✕</button>' +
+              '<span class="badge ' + (b.format === 'epub' ? 'epub' : '') + '">' + b.format.toUpperCase() + '</span>' +
+              '<h3>' + esc(b.title) + '</h3>' +
+              '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+              '<div class="meta">' + fmtSize(b.size) + ' · 已读 ' + pct + '%' +
+              (b.author ? ' · ' + esc(b.author) : '') + '</div>' +
+              '</article>'
+            );
+          })
+          .join('');
+      }
+
+      async function importFiles(files) {
+        const all = Array.from(files || []);
+        const list = all.filter((f) => detectFormat(f));
+        const rejected = all.filter((f) => !detectFormat(f));
+
+        if (rejected.length) {
+          const names = rejected.map((f) => f.name + '（类型 ' + (f.type || '未知') + '）').join('；');
+          toast('有 ' + rejected.length + ' 个文件没被识别：' + names + '。只支持 .pdf 和 .epub');
+          diag('import-rejected', {
+            rejected: rejected.map((f) => ({ name: f.name, type: f.type, size: f.size })),
+          });
+        }
+        if (!list.length) return;
+
+        try {
+          for (const file of list) {
+            const id = bookIdOf(file);
+            const existing = await dbGet('books', id);
+            await dbPut('files', file, id);
+            if (!existing) {
+              await dbPut('books', {
+                id,
+                title: titleFromName(file.name),
+                format: detectFormat(file),
+                size: file.size,
+                addedAt: Date.now(),
+                lastOpenedAt: 0,
+                percent: 0,
+                location: null,
+              });
+            }
+          }
+          await refreshBooks();
+          toast('已导入 ' + list.length + ' 个文件');
+          diag('import-ok', {
+            items: list.map((f) => ({ name: f.name, type: f.type, size: f.size, format: detectFormat(f) })),
+          });
+        } catch (err) {
+          console.error(err);
+          toast('导入失败：' + ((err && err.message) || String(err)));
+          diag('import-failed', { message: (err && err.message) || String(err) });
+        }
+      }
+
+      async function deleteBook(id) {
+        const rec = state.books.find((b) => b.id === id);
+        if (!confirm('移除《' + (rec ? rec.title : id) + '》？本地缓存的文件和高亮会一起删掉（译文缓存保留）。')) return;
+        await dbDel('files', id);
+        await dbDel('books', id);
+        for (const h of await dbByIndex('highlights', 'bookId', id)) await dbDel('highlights', h.id);
+        await refreshBooks();
+      }
+
+      /* ---------------- 打开 / 关闭 ---------------- */
+      async function openBook(id) {
+        const book = await dbGet('books', id);
+        if (!book) return;
+        book.lastOpenedAt = Date.now();
+        await dbPut('books', book);
+        state.book = book;
+        state.paragraphs = [];
+        state.paraPage = 0;
+        state.noTextLayer = false;
+        $('#library').hidden = true;
+        $('#reader').hidden = false;
+        $('#reader-title').textContent = book.title;
+        $('#reader-title').title = book.title;
+        $('#pct').textContent = fmtPct(book.percent || 0);
+        await mountReader(book);
+      }
+
+      function closeReader() {
+        if (state.adapter) state.adapter.destroy();
+        state.adapter = null;
+        state.book = null;
+        state.toc = [];
+        state.highlights = [];
+        state.vocab = [];
+        state.paragraphs = [];
+        state.pending = null;
+        closePopover();
+        hideBubble();
+        setPanel(null);
+        $('#stage').innerHTML = '';
+        $('#reader').hidden = true;
+        $('#library').hidden = false;
+        refreshBooks();
+      }
+
+      async function mountReader(book) {
+        const stage = $('#stage');
+        stage.innerHTML = '<div class="loading-box">正在打开《' + esc(book.title) + '》…</div>';
+        try {
+          const blob = await dbGet('files', book.id);
+          if (!blob) throw new Error('本地缓存里找不到这个文件，请回书架重新导入。');
+
+          const adapter = book.format === 'pdf' ? createPdfAdapter() : createEpubAdapter();
+          const opened = await adapter.open(blob, { bookId: book.id, title: book.title });
+
+          if (opened.meta && opened.meta.title && opened.meta.title !== book.title) {
+            book.title = opened.meta.title;
+            book.author = opened.meta.author;
+            await dbPut('books', book);
+            $('#reader-title').textContent = book.title;
+            $('#reader-title').title = book.title;
+          }
+
+          state.adapter = adapter;
+          state.toc = opened.toc || [];
+          stage.innerHTML = '';
+          const holder = document.createElement('div');
+          stage.appendChild(holder);
+          applyAppearance(); // 要在 mount 之前：EPUB 的排版方式(flow)和行距是建渲染器时定的
+          await adapter.mount(holder);
+
+          state.highlights = (await dbByIndex('highlights', 'bookId', book.id)) || [];
+          adapter.setHighlights(state.highlights.map((h) => ({ id: h.id, location: h.location })));
+          adapter.onLocationChange((loc) => {
+            $('#pct').textContent = fmtPct(loc.percent);
+            updatePageUi(loc);
+            saveProgress(loc);
+          });
+          adapter.onSelect(showPopover);
+          if (adapter.onParagraphs) adapter.onParagraphs(setParagraphs);
+          if (adapter.onParagraphHover) adapter.onParagraphHover((payload) => (payload ? showBubble(payload) : hideBubble()));
+          if (adapter.onWheel) adapter.onWheel((deltaY) => adjustContentByWheel(deltaY));
+          if (adapter.onTap) adapter.onTap(() => closePopover());
+          if (adapter.setOcrLang) adapter.setOcrLang(state.ocrLang);
+          if (adapter.setOcrPsm) adapter.setOcrPsm(state.ocrPsm);
+          applyAppearance();
+          await adapter.goTo(book.location || null);
+          adapter.currentLocation().then((loc) => ($('#pct').textContent = fmtPct(loc.percent)));
+          if (adapter.getCurrentParagraphs) setParagraphs(adapter.getCurrentParagraphs());
+          applyBiMode(state.biMode);
+          // 默认展开侧栏（用它上次看的那一页，没有就用格式对应的默认页）
+          const fallback = book.format === 'pdf' ? 'bi' : 'toc';
+          const wanted = state.panelTab || fallback;
+          setPanel(wanted);
+          if (adapter.currentLocation) adapter.currentLocation().then(updatePageUi).catch(() => {});
+          // 字体/滚动条落下后再量两次，消除容器与可视区的尺寸错位
+          setTimeout(() => adapter.relayout && adapter.relayout(), 350);
+          setTimeout(() => adapter.relayout && adapter.relayout(), 1200);
+        } catch (err) {
+          console.error(err);
+          const message = (err && err.message) || String(err);
+          stage.innerHTML =
+            '<div class="error-box"><strong>打开失败</strong><p>' +
+            esc(message) +
+            '</p><button class="btn small" id="btn-open-retry">回书架</button></div>';
+          const retry = document.getElementById('btn-open-retry');
+          if (retry) retry.addEventListener('click', closeReader);
+          diag('open-failed', {
+            bookId: book.id,
+            format: book.format,
+            size: book.size,
+            message,
+            stack: String((err && err.stack) || '').slice(0, 800),
+          });
+        }
+      }
+
+      let saveTimer = null;
+      function saveProgress(location) {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(async () => {
+          if (!state.book) return;
+          state.book.location = location;
+          state.book.percent = location.percent;
+          await dbPut('books', state.book);
+        }, 400);
+      }
+
+      /* ---------------- 中英对照 ---------------- */
+      const BI_CYCLE = ['off', 'hover', 'always'];
+
+      function biLabel(mode) {
+        if (mode === 'off') return '对照：关';
+        if (mode === 'hover') return '对照：悬停';
+        return state.book && state.book.format === 'pdf' ? '对照：侧栏' : '对照：常显';
+      }
+
+      function applyBiMode(mode) {
+        state.biMode = mode;
+        localStorage.setItem('reader.bi', mode);
+        const btn = $('#btn-bi');
+        btn.textContent = biLabel(mode);
+        btn.setAttribute('aria-pressed', String(mode !== 'off'));
+        if (state.adapter && state.adapter.applyBilingual) state.adapter.applyBilingual(mode);
+        const isPdf = state.book && state.book.format === 'pdf';
+        if (mode !== 'always' || !isPdf) hideBubble();
+        if (isPdf && mode === 'always') {
+          setPanel('bi');
+          translatePageParagraphs();
+        }
+      }
+
+      /** 段落数据统一从这里进 state：适配器回调、以及打开后补读一次 */
+      function setParagraphs({ page, items }) {
+        state.paraPage = page;
+        state.paragraphs = (items || []).map((p) => ({ ...p, zh: null, st: 'idle', err: '' }));
+
+        // 扫描版 PDF：连续几页一个文字对象都没有，就别再显示"正在提取"了
+        const textStats = state.adapter && state.adapter.textStats ? state.adapter.textStats() : null;
+        if (textStats) {
+          if (textStats.pagesWithText === 0 && textStats.pagesWithoutText >= 2 && !state.noTextLayer) {
+            state.noTextLayer = true;
+            toast('这本 PDF 没有文字层（扫描版）：可在侧栏「对照」里做 OCR');
+          } else if (textStats.pagesWithText > 0 && state.noTextLayer) {
+            state.noTextLayer = false; // OCR 之后恢复正常
+          }
+        }
+
+        if (state.panel === 'bi') renderBiList();
+        if (state.biMode === 'always') translatePageParagraphs();
+        if (state.ocrAuto && state.noTextLayer) ocrVisiblePages();
+      }
+
+      const paraKey = (p) => state.paraPage + ':' + p.index;
+      const findPara = (key) => state.paragraphs.find((p) => paraKey(p) === key);
+
+      /** 整页译（PDF 侧栏模式）：逐段排队，队列本身有并发上限和缓存 */
+      function translatePageParagraphs() {
+        if (!state.book || state.book.format !== 'pdf') return;
+        for (const p of state.paragraphs) translatePara(p);
+        renderBiList();
+      }
+
+      function translatePara(p) {
+        const key = paraKey(p);
+        if (p.st === 'loading' || p.st === 'ok') return;
+        p.st = 'loading';
+        updateBiCard(key);
+        translate(p.text)
+          .then((zh) => {
+            const item = findPara(key);
+            if (!item) return;
+            item.zh = zh;
+            item.st = 'ok';
+            updateBiCard(key);
+          })
+          .catch((err) => {
+            const item = findPara(key);
+            if (!item) return;
+            item.st = 'error';
+            item.err = (err && err.message) || String(err);
+            updateBiCard(key);
+          });
+      }
+
+      const OCR_LANGS = [
+        ['eng+chi_sim', '中英混合（模型较大）'],
+        ['eng', '英文'],
+        ['chi_sim', '中文'],
+      ];
+      const OCR_PSMS = [
+        [3, '自动（推荐）'],
+        [6, '单栏正文（书页更干净）'],
+        [1, '多栏 / 复杂版面'],
+      ];
+
+      function ocrStatusText(status) {
+        const map = {
+          'loading tesseract core': '加载识别内核',
+          'initializing tesseract': '初始化内核',
+          'loading language traineddata': '下载语言模型',
+          'initializing api': '初始化接口',
+          'recognizing text': '识别文字中',
+        };
+        return map[status] || status || '';
+      }
+
+      /** 扫描版 PDF 的 OCR 操作卡片 */
+      function ocrCardHtml() {
+        return (
+          '<div class="ocr-card">' +
+          '<div class="ocr-title">' +
+          (state.noTextLayer ? '这本 PDF 是扫描版（没有文字层）' : '这一页没有文字层') +
+          '</div>' +
+          '<div class="ocr-body">识别之后，这一页就能划词、也能做段落对照。结果存在本地，同一页不会重复识别。</div>' +
+          '<label class="ocr-row">语言 <select id="ocr-lang">' +
+          OCR_LANGS.map(
+            ([value, label]) =>
+              '<option value="' + value + '"' + (state.ocrLang === value ? ' selected' : '') + '>' + label + '</option>',
+          ).join('') +
+          '</select></label>' +
+          '<label class="ocr-row">模式 <select id="ocr-psm">' +
+          OCR_PSMS.map(
+            ([value, label]) =>
+              '<option value="' + value + '"' + (state.ocrPsm === value ? ' selected' : '') + '>' + label + '</option>',
+          ).join('') +
+          '</select></label>' +
+          '<div class="ocr-acts">' +
+          '<button class="btn small primary" data-ocr-page="1"' + (state.ocrBusy ? ' disabled' : '') + '>' +
+          (state.ocrBusy ? '识别中…' : '识别本页（第 ' + (state.paraPage || 1) + ' 页）') +
+          '</button>' +
+          '<button class="btn small" data-ocr-auto="1" aria-pressed="' + (state.ocrAuto ? 'true' : 'false') + '">' +
+          (state.ocrAuto ? '自动识别：开' : '自动识别：关') +
+          '</button>' +
+          '</div>' +
+          '<div class="ocr-progress" id="ocr-progress">' +
+          esc(state.ocrStatus || '首次识别需要下载语言模型，请耐心等一下') +
+          '</div>' +
+          '</div>'
+        );
+      }
+
+      function renderBiList() {
+        const list = $('#side-list');
+        if (!list) return;
+        if (!state.paragraphs.length) {
+          // 当前页确实没有文字（扫描页）就把 OCR 卡片给出来；还在解析中则显示提示
+          const pageStats = (
+            state.adapter && state.adapter.bilingualStats ? state.adapter.bilingualStats() : []
+          ).find((s) => s.page === state.paraPage);
+          const noTextHere = state.noTextLayer || (pageStats ? pageStats.items === 0 : false);
+          list.innerHTML = noTextHere
+            ? ocrCardHtml()
+            : '<div class="none">正在提取本页文本…</div>';
+          return;
+        }
+        list.innerHTML =
+          '<div class="none" style="padding:0 0 6px">第 ' + state.paraPage + ' 页 · ' +
+          state.paragraphs.length + ' 段（点条目可定位到页面位置）</div>' +
+          state.paragraphs
+            .map((p) => {
+              const key = paraKey(p);
+              return (
+                '<div class="bi" data-bi-key="' + key + '">' +
+                '<div class="en">' + esc(p.text.slice(0, 260)) + (p.text.length > 260 ? '…' : '') + '</div>' +
+                '<div class="zh' + (p.st === 'loading' ? ' loading' : p.st === 'error' ? ' err' : '') + '">' +
+                (p.st === 'ok' ? esc(p.zh) : p.st === 'loading' ? '翻译中…' : p.st === 'error' ? '翻译失败：' + esc(p.err) : '待翻译') +
+                '</div></div>'
+              );
+            })
+            .join('');
+      }
+
+      function updateBiCard(key) {
+        const card = document.querySelector('[data-bi-key="' + key + '"]');
+        if (!card) return;
+        const item = findPara(key);
+        const zh = card.querySelector('.zh');
+        if (!item || !zh) return;
+        zh.className = 'zh' + (item.st === 'loading' ? ' loading' : item.st === 'error' ? ' err' : '');
+        zh.textContent =
+          item.st === 'ok' ? item.zh : item.st === 'loading' ? '翻译中…' : item.st === 'error' ? '翻译失败：' + item.err : '待翻译';
+      }
+
+      /* ---- 扫描版 PDF 的 OCR 操作 ---- */
+      function setOcrAuto(on) {
+        state.ocrAuto = !!on;
+        localStorage.setItem('reader.ocrauto', state.ocrAuto ? '1' : '0');
+        renderBiList();
+        hud(state.ocrAuto ? '自动识别：开' : '自动识别：关');
+        if (state.ocrAuto) ocrVisiblePages();
+      }
+
+      async function runOcr(pageNo) {
+        const adapter = state.adapter;
+        if (state.ocrBusy || !adapter || !adapter.ocrPage) return;
+        state.ocrBusy = true;
+        state.ocrStatus = '准备中…';
+        renderBiList();
+        try {
+          const words = await adapter.ocrPage(pageNo, state.ocrLang, (m) => {
+            const pct = m.progress ? ' ' + Math.round(m.progress * 100) + '%' : '';
+            state.ocrStatus = ocrStatusText(m.status) + pct;
+            const node = $('#ocr-progress');
+            if (node) node.textContent = state.ocrStatus;
+          }, state.ocrPsm);
+          state.ocrStatus =
+            '第 ' + pageNo + ' 页：' + words.words.length + ' 个词块 / ' + words.paragraphs.length +
+            ' 段 · 置信度 ' + Math.round(words.conf || 0);
+          toast('第 ' + pageNo + ' 页识别完成');
+        } catch (err) {
+          console.error(err);
+          state.ocrStatus = '识别失败：' + ((err && err.message) || String(err));
+        } finally {
+          state.ocrBusy = false;
+          renderBiList();
+        }
+      }
+
+      /** 自动模式：把当前页和前后各一页里还没识别的挑出来识别 */
+      async function ocrVisiblePages() {
+        const total = state.pageTotal || 0;
+        const pages = [state.paraPage, state.paraPage + 1, state.paraPage - 1].filter(
+          (p) => p >= 1 && (!total || p <= total),
+        );
+        for (const page of pages) {
+          if (!state.ocrAuto) return;
+          if (state.adapter && state.adapter.hasOcr && state.adapter.hasOcr(page)) continue;
+          await runOcr(page);
+        }
+      }
+
+      /* ---- 悬停译文气泡（PDF） ---- */
+      let bubbleToken = 0;
+
+      function positionBubble(x, y) {
+        const b = $('#bubble');
+        const w = b.offsetWidth || 360;
+        const h = b.offsetHeight || 80;
+        b.style.left = Math.max(10, Math.min(x + 16, window.innerWidth - w - 12)) + 'px';
+        const below = y + 18;
+        b.style.top = (below + h > window.innerHeight - 10 ? Math.max(10, y - h - 14) : below) + 'px';
+      }
+
+      function showBubble(payload) {
+        const b = $('#bubble');
+        const token = ++bubbleToken;
+        b.hidden = false;
+        b.innerHTML =
+          '<span class="en">' + esc(payload.text.slice(0, 220)) + '</span>' +
+          '<span id="bubble-zh" style="font-style:italic;color:var(--muted)">翻译中…</span>';
+        positionBubble(payload.clientX, payload.clientY);
+        translate(payload.text)
+          .then((zh) => {
+            if (token !== bubbleToken) return;
+            const node = document.getElementById('bubble-zh');
+            if (node) {
+              node.textContent = zh;
+              node.style.fontStyle = '';
+              node.style.color = '';
+            }
+            positionBubble(payload.clientX, payload.clientY);
+          })
+          .catch((err) => {
+            if (token !== bubbleToken) return;
+            const node = document.getElementById('bubble-zh');
+            if (node) {
+              node.textContent = '翻译失败：' + err.message;
+              node.style.color = '#e5484d';
+            }
+            positionBubble(payload.clientX, payload.clientY);
+          });
+      }
+
+      function hideBubble() {
+        bubbleToken++;
+        $('#bubble').hidden = true;
+      }
+
+      /* ---- 划词气泡 ---- */
+      const HL_PALETTE = ['#ffd666', '#9be59b', '#9cc9ff', '#ffb3c8', '#d7b8ff'];
+
+      function showPopover(sel) {
+        if (state.selMenu === 'off') return; // 彻底禁止弹出
+        if (state.selMenu === 'context' && sel.via && sel.via !== 'context') return;
+        const pop = $('#popover');
+        const word = firstWord(sel.text);
+        const source = sel.context || sel.text;
+        pop.innerHTML =
+          '<div class="word">' + esc(word) + '</div>' +
+          '<div class="src">' + markWord(source, word) + '</div>' +
+          '<div class="zh" id="pop-zh" hidden></div>' +
+          '<div class="acts">' +
+          '<button class="btn small primary" data-act="translate">翻译</button>' +
+          '<button class="btn small" data-act="vocab">生词本</button>' +
+          '<button class="btn small" data-act="copy">复制</button>' +
+          '<button class="btn small ghost" data-act="close">关闭</button>' +
+          '</div>' +
+          '<div class="hl-row"><span class="look-hint">高亮</span>' +
+          HL_PALETTE.map(
+            (c) => '<span class="sw" data-pick-hl="' + c + '" title="用这个颜色高亮" style="background:' + c + '"></span>',
+          ).join('') +
+          '</div>';
+        pop.hidden = false;
+        state.pending = sel;
+
+        const r = sel.rect || { top: 100, left: 100, width: 0, height: 0 };
+        const w = 320;
+        const h = pop.offsetHeight || 170;
+        const left = Math.min(Math.max(10, r.left + r.width / 2 - w / 2), window.innerWidth - w - 10);
+        let top = r.top - h - 12;
+        if (top < 70) top = Math.min(window.innerHeight - h - 10, r.top + (r.height || 18) + 12);
+        pop.style.left = left + 'px';
+        pop.style.top = top + 'px';
+        // 不再自动翻译：点「翻译」才发请求，省额度也少打扰
+      }
+
+      function closePopover() {
+        $('#popover').hidden = true;
+        state.pending = null;
+      }
+
+      async function copyText(text) {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          try {
+            document.execCommand('copy');
+          } catch {
+            /* 剪贴板不可用就算了 */
+          }
+          ta.remove();
+        }
+      }
+
+      /** 加高亮：颜色可指定，默认用当前选中的高亮色 */
+      async function addHighlight(sel, color) {
+        const rec = {
+          id: uid(),
+          bookId: state.book.id,
+          text: sel.text,
+          context: sel.context,
+          color: color || state.hlColor,
+          location: sel.location,
+          createdAt: Date.now(),
+        };
+        await dbPut('highlights', rec);
+        state.highlights.unshift(rec);
+        paintAllHighlights();
+        if (state.panel === 'highlights') renderPanel();
+        toast('已高亮');
+      }
+
+      function refreshHighlightAnchors() {
+        paintAllHighlights();
+      }
+
+      /** 把高亮（含颜色）重新画到当前渲染器上 */
+      function paintAllHighlights() {
+        if (state.adapter && state.adapter.setHighlights) {
+          state.adapter.setHighlights(
+            state.highlights.map((h) => ({ id: h.id, location: h.location, color: h.color })),
+          );
+        }
+      }
+
+      /* ---------------- 侧栏 ---------------- */
+      function panelTabs() {
+        const isPdf = state.book && state.book.format === 'pdf';
+        const tabs = [];
+        if (isPdf) tabs.push(['bi', '对照']);
+        tabs.push(['toc', '目录'], ['highlights', '高亮'], ['vocab', '生词']);
+        return tabs;
+      }
+
+      function setPanel(tab) {
+        const side = $('#side');
+        let next = tab || null;
+        if (next && !panelTabs().some(([key]) => key === next)) next = 'toc';
+        state.panel = next;
+        $('#btn-panel').setAttribute('aria-pressed', String(!!next));
+        $('#splitter').hidden = !next;
+        if (next) {
+          state.panelTab = next;
+          localStorage.setItem('reader.paneltab', next);
+        }
+        if (!next) {
+          side.hidden = true;
+          side.innerHTML = '';
+          return;
+        }
+        side.hidden = false;
+        renderPanel();
+        if (state.adapter && state.adapter.relayout) setTimeout(() => state.adapter.relayout(), 60);
+      }
+
+      async function renderPanel() {
+        const side = $('#side');
+        const tab = state.panel;
+        if (!tab) return;
+        if (tab === 'vocab') state.vocab = (await dbByIndex('vocab', 'bookId', state.book.id)) || [];
+
+        side.innerHTML =
+          '<div class="tabs">' +
+          panelTabs()
+            .map(([key, label]) => '<button data-tab="' + key + '" aria-selected="' + (tab === key) + '">' + label + '</button>')
+            .join('') +
+          '</div><div class="side-list" id="side-list"></div>';
+
+        const list = $('#side-list');
+        if (tab === 'bi') {
+          if (state.book.format !== 'pdf') {
+            list.innerHTML =
+              '<div class="none">EPUB 的中文对照直接显示在正文每段下面。<br /><br />' +
+              '用顶部的「对照」按钮切换：<br />关 = 只看英文；悬停 = 鼠标移上去才显示；常显 = 一直显示。<br /><br />' +
+              '只翻译你看得见的部分，所以不会一上来就把整本书翻完。</div>';
+            return;
+          }
+          renderBiList();
+          return;
+        }
+
+        if (tab === 'toc') {
+          list.innerHTML = state.toc.length
+            ? state.toc
+                .map(
+                  (t, i) =>
+                    '<div class="toc-item" data-toc="' + i + '" style="padding-left:' + (10 + t.depth * 14) + 'px">' +
+                    esc(t.label) + '</div>',
+                )
+                .join('')
+            : '<div class="none">这本书没有可用的目录。</div>';
+          return;
+        }
+
+        if (tab === 'highlights') {
+          list.innerHTML = state.highlights.length
+            ? state.highlights
+                .map((h) => {
+                  const short = (h.text || '').slice(0, 30);
+                  return (
+                    '<div class="item" data-hl="' + h.id + '">' +
+                    '<div class="row">' +
+                    '<span class="dot" style="background:' + esc(h.color || '#ffd666') + '"></span>' +
+                    '<span class="w">' + esc(short) + ((h.text || '').length > 30 ? '…' : '') + '</span>' +
+                    '<button class="rm" data-rm-hl="' + h.id + '" title="删除">✕</button></div>' +
+                    (h.context ? '<div class="ctx">' + markWord(h.context, firstWord(h.text || '')) + '</div>' : '') +
+                    '</div>'
+                  );
+                })
+                .join('')
+            : '<div class="none">还没有高亮。选中一段英文，点「高亮」。</div>';
+          return;
+        }
+
+        list.innerHTML = state.vocab.length
+          ? state.vocab
+              .map((v) => {
+                const showLemma = v.lemma && v.lemma !== lookupKey(v.word);
+                return (
+                  '<div class="item">' +
+                  '<div class="row"><span class="w">' + esc(v.word) + '</span>' +
+                  (showLemma ? '<span class="ctx" style="margin:0">' + esc(v.lemma) + '</span>' : '') +
+                  '<button class="rm" data-rm-vocab="' + v.id + '" title="删除">✕</button></div>' +
+                  (v.context ? '<div class="ctx">' + markWord(v.context, v.word) + '</div>' : '') +
+                  '</div>'
+                );
+              })
+              .join('')
+          : '<div class="none">生词本还是空的。选中单词，点「生词本」。</div>';
+      }
+
+      /* ---------------- 翻译设置 ---------------- */
+      function openSettings() {
+        $('#cfg-provider').value = settings.provider;
+        $('#cfg-base').value = settings.baseUrl || '';
+        $('#cfg-key').value = settings.apiKey || '';
+        $('#cfg-model').value = settings.model || '';
+        $('#cfg-openai').hidden = settings.provider !== 'openai';
+        $('#settings').hidden = false;
+      }
+      const closeSettings = () => ($('#settings').hidden = true);
+
+      function readSettingsForm() {
+        settings.provider = $('#cfg-provider').value;
+        settings.baseUrl = $('#cfg-base').value.trim();
+        settings.apiKey = $('#cfg-key').value.trim();
+        settings.model = $('#cfg-model').value.trim();
+      }
+
+      /* =====================================================================
+       * 8. 事件绑定与启动
+       * ================================================================== */
+      $('#file-input').addEventListener('change', (e) => {
+        importFiles(e.target.files);
+        e.target.value = '';
+      });
+
+      $('#book-grid').addEventListener('click', (e) => {
+        const del = e.target.closest('[data-del]');
+        if (del) {
+          e.stopPropagation();
+          deleteBook(del.dataset.del);
+          return;
+        }
+        const open = e.target.closest('[data-open]');
+        if (open) openBook(open.dataset.open);
+      });
+
+      let dragDepth = 0;
+      document.addEventListener('dragenter', (e) => {
+        if (!e.dataTransfer || !Array.from(e.dataTransfer.types).includes('Files')) return;
+        dragDepth++;
+        $('#drop').hidden = false;
+      });
+      document.addEventListener('dragover', (e) => e.preventDefault());
+      document.addEventListener('dragleave', () => {
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) $('#drop').hidden = true;
+      });
+      document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dragDepth = 0;
+        $('#drop').hidden = true;
+        if (e.dataTransfer && e.dataTransfer.files.length) importFiles(e.dataTransfer.files);
+      });
+
+      $('#btn-back').addEventListener('click', closeReader);
+      $('#btn-next').addEventListener('click', () => state.adapter && state.adapter.next());
+      $('#btn-prev').addEventListener('click', () => state.adapter && state.adapter.prev());
+      $('#btn-font-up').addEventListener('click', () => setFontSize(state.fontSize + 10));
+      $('#btn-font-down').addEventListener('click', () => setFontSize(state.fontSize - 10));
+
+      function setFontSize(size) {
+        state.fontSize = Math.min(200, Math.max(60, size));
+        localStorage.setItem('reader.fontSize', String(state.fontSize));
+        applyAppearance();
+      }
+
+      /** Ctrl+滚轮：EPUB 调栏宽，PDF 调缩放 */
+      function adjustContentByWheel(deltaY) {
+        if (!state.book) return;
+        const dir = deltaY > 0 ? -1 : 1;
+        if (state.book.format === 'epub') {
+          setContentWidth((state.contentWidth || 900) + dir * 40);
+        } else {
+          setFontSize(state.fontSize + dir * 10);
+          hud('缩放 ' + state.fontSize + '%');
+        }
+      }
+
+      const THEMES = ['light', 'sepia', 'dark'];
+      $('#btn-theme').addEventListener('click', () => {
+        state.theme = THEMES[(THEMES.indexOf(state.theme) + 1) % THEMES.length];
+        localStorage.setItem('reader.theme', state.theme);
+        document.documentElement.dataset.theme = state.theme;
+        applyAppearance();
+        hud('主题：' + (THEME_NAMES[state.theme] || state.theme));
+      });
+
+      /* ---------------- 外观面板与侧栏 ---------------- */
+      $('#btn-look').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const look = $('#look');
+        look.hidden = !look.hidden;
+        $('#btn-look').setAttribute('aria-pressed', String(!look.hidden));
+      });
+
+      document.addEventListener('mousedown', (e) => {
+        const look = $('#look');
+        if (look.hidden) return;
+        if (e.target.closest('#look') || e.target.closest('#btn-look')) return;
+        look.hidden = true;
+        $('#btn-look').setAttribute('aria-pressed', 'false');
+      });
+
+      $('#look').addEventListener('click', (e) => {
+        const sw = e.target.closest('.sw');
+        if (!sw) return;
+        if (sw.hasAttribute('data-bg')) setBg(sw.dataset.bg || '');
+        else if (sw.dataset.sel) setSelColor(sw.dataset.sel);
+        else if (sw.dataset.hl) setHlColor(sw.dataset.hl);
+      });
+
+      $('#bg-custom').addEventListener('input', (e) => setBg(e.target.value));
+      $('#btn-width-up').addEventListener('click', () => setContentWidth((state.contentWidth || 900) + 40));
+      $('#btn-width-down').addEventListener('click', () => {
+        const cur = state.contentWidth || 900;
+        setContentWidth(cur - 40 <= 600 ? 0 : cur - 40);
+      });
+      $('#btn-line-down').addEventListener('click', () => setLineHeight(state.lineHeight - 0.1));
+      $('#btn-line-up').addEventListener('click', () => setLineHeight(state.lineHeight + 0.1));
+      $('#btn-flow').addEventListener('click', () => setWheelMode(state.wheelMode === 'page' ? 'scroll' : 'page'));
+      $('#btn-reset').addEventListener('click', resetAppearance);
+      $('#btn-selmenu').addEventListener('click', () => {
+        const order = ['auto', 'context', 'off'];
+        setSelMenu(order[(order.indexOf(state.selMenu) + 1) % order.length]);
+      });
+
+      // Ctrl / Cmd + 滚轮在正文区调整内容宽度（iframe 内的那种由适配器回调进来）
+      document.addEventListener(
+        'wheel',
+        (e) => {
+          if ($('#reader').hidden) return;
+          if (!e.ctrlKey && !e.metaKey) return;
+          const target = e.target;
+          if (target && target.closest && target.closest('.side, .look, .popover, .modal')) return;
+          e.preventDefault();
+          adjustContentByWheel(e.deltaY);
+        },
+        { passive: false },
+      );
+
+      // 侧栏宽度拖拽
+      const splitterEl = $('#splitter');
+      let splitDragging = false;
+      splitterEl.addEventListener('pointerdown', (e) => {
+        splitDragging = true;
+        splitterEl.classList.add('dragging');
+        try {
+          splitterEl.setPointerCapture(e.pointerId);
+        } catch {
+          /* 不支持指针捕获也能拖 */
+        }
+        e.preventDefault();
+      });
+      splitterEl.addEventListener('pointermove', (e) => {
+        if (!splitDragging) return;
+        const box = $('#reader-body').getBoundingClientRect();
+        state.sideWidth = Math.max(220, Math.min(820, Math.round(e.clientX - box.left)));
+        document.documentElement.style.setProperty('--side-w', state.sideWidth + 'px');
+      });
+      const endSplitDrag = () => {
+        if (!splitDragging) return;
+        splitDragging = false;
+        splitterEl.classList.remove('dragging');
+        localStorage.setItem('reader.side', String(state.sideWidth));
+      };
+      splitterEl.addEventListener('pointerup', endSplitDrag);
+      splitterEl.addEventListener('pointercancel', endSplitDrag);
+      splitterEl.addEventListener('pointerup', () => {
+        if (state.adapter && state.adapter.relayout) state.adapter.relayout();
+      });
+
+      $('#btn-bi').addEventListener('click', () => {
+        const next = BI_CYCLE[(BI_CYCLE.indexOf(state.biMode) + 1) % BI_CYCLE.length];
+        applyBiMode(next);
+        if (next === 'hover') toast('鼠标移到段落上即可看译文');
+      });
+
+      $('#btn-panel').addEventListener('click', () => {
+        if (state.panel) return setPanel(null);
+        setPanel(state.book && state.book.format === 'pdf' ? 'bi' : 'toc');
+      });
+
+      $('#side').addEventListener('click', async (e) => {
+        const tabBtn = e.target.closest('[data-tab]');
+        if (tabBtn) {
+          state.panel = tabBtn.dataset.tab;
+          renderPanel();
+          return;
+        }
+        const ocrPageBtn = e.target.closest('[data-ocr-page]');
+        if (ocrPageBtn) {
+          runOcr(state.paraPage || 1);
+          return;
+        }
+        const ocrAutoBtn = e.target.closest('[data-ocr-auto]');
+        if (ocrAutoBtn) {
+          setOcrAuto(!state.ocrAuto);
+          return;
+        }
+        const bi = e.target.closest('[data-bi-key]');
+        if (bi) {
+          const item = findPara(bi.dataset.biKey);
+          if (item && state.adapter && state.adapter.flashParagraph) {
+            state.adapter.flashParagraph(state.paraPage, item.index);
+          }
+          if (item) translatePara(item);
+          return;
+        }
+        const toc = e.target.closest('[data-toc]');
+        if (toc) {
+          const item = state.toc[Number(toc.dataset.toc)];
+          if (item && state.adapter) state.adapter.goTo(item.location);
+          return;
+        }
+        const rmHl = e.target.closest('[data-rm-hl]');
+        if (rmHl) {
+          await dbDel('highlights', rmHl.dataset.rmHl);
+          state.highlights = state.highlights.filter((h) => h.id !== rmHl.dataset.rmHl);
+          refreshHighlightAnchors();
+          renderPanel();
+          return;
+        }
+        const rmVocab = e.target.closest('[data-rm-vocab]');
+        if (rmVocab) {
+          await dbDel('vocab', rmVocab.dataset.rmVocab);
+          state.vocab = state.vocab.filter((v) => v.id !== rmVocab.dataset.rmVocab);
+          renderPanel();
+          return;
+        }
+        const hl = e.target.closest('[data-hl]');
+        if (hl) {
+          const item = state.highlights.find((h) => h.id === hl.dataset.hl);
+          if (item && state.adapter) state.adapter.goTo(item.location);
+        }
+      });
+
+      // OCR 语言切换
+      $('#side').addEventListener('change', (e) => {
+        if (!e.target) return;
+        if (e.target.id === 'ocr-lang') {
+          state.ocrLang = e.target.value;
+          localStorage.setItem('reader.ocrlang', state.ocrLang);
+          if (state.adapter && state.adapter.setOcrLang) state.adapter.setOcrLang(state.ocrLang);
+          toast('OCR 语言已切换');
+          return;
+        }
+        if (e.target.id === 'ocr-psm') {
+          state.ocrPsm = Number(e.target.value) || 3;
+          localStorage.setItem('reader.ocrpsm', String(state.ocrPsm));
+          if (state.adapter && state.adapter.setOcrPsm) state.adapter.setOcrPsm(state.ocrPsm);
+          toast('识别模式已切换，重新识别本页即可看到差别');
+        }
+      });
+
+      $('#popover').addEventListener('click', async (e) => {
+        const pick = e.target.closest('[data-pick-hl]');
+        if (pick && state.pending && state.book) {
+          const sel = state.pending;
+          await addHighlight(sel, pick.dataset.pickHl);
+          return closePopover();
+        }
+        const btn = e.target.closest('[data-act]');
+        if (!btn || !state.pending || !state.book) return;
+        const sel = state.pending;
+        const act = btn.dataset.act;
+
+        if (act === 'close') return closePopover();
+        if (act === 'translate') {
+          const source = sel.context || sel.text;
+          const node = document.getElementById('pop-zh');
+          if (!node) return;
+          node.hidden = false;
+          node.style.color = '';
+          node.textContent = '翻译中…';
+          translate(source)
+            .then((zh) => {
+              if (state.pending === sel) node.textContent = zh;
+            })
+            .catch((err) => {
+              node.textContent = '翻译失败：' + ((err && err.message) || String(err));
+              node.style.color = '#e5484d';
+            });
+          return;
+        }
+        if (act === 'copy') {
+          await copyText(sel.text);
+          toast('已复制');
+          return closePopover();
+        }
+        if (act === 'hl') {
+          await addHighlight(sel, state.hlColor);
+          return closePopover();
+        }
+        if (act === 'vocab') {
+          const word = firstWord(sel.text);
+          await dbPut('vocab', {
+            id: uid(),
+            bookId: state.book.id,
+            word,
+            lemma: lemmaOf(word),
+            context: sel.context,
+            zh: (document.getElementById('pop-zh') || {}).textContent || '',
+            location: sel.location,
+            createdAt: Date.now(),
+            reviewCount: 0,
+          });
+          toast('已加入生词本：' + word);
+          return closePopover();
+        }
+      });
+
+      $('#btn-settings').addEventListener('click', openSettings);
+      $('#btn-cfg').addEventListener('click', openSettings);
+      $('#cfg-close').addEventListener('click', closeSettings);
+      $('#settings').addEventListener('click', (e) => {
+        if (e.target.id === 'settings') closeSettings();
+      });
+      $('#cfg-provider').addEventListener('change', () => {
+        $('#cfg-openai').hidden = $('#cfg-provider').value !== 'openai';
+      });
+      $('#cfg-save').addEventListener('click', () => {
+        readSettingsForm();
+        saveSettings();
+        closeSettings();
+        toast('已保存：' + currentProvider().label);
+      });
+      $('#cfg-test').addEventListener('click', async () => {
+        readSettingsForm();
+        toast('测试中…');
+        try {
+          const out = await testTranslate();
+          toast('测试成功：' + out.slice(0, 40));
+        } catch (err) {
+          alert('测试失败：' + (err && err.message ? err.message : String(err)));
+        }
+      });
+
+      document.addEventListener('mousedown', (e) => {
+        if ($('#popover').hidden) return;
+        if (e.target.closest('#popover')) return;
+        closePopover(); // 点空白处（含正文里的空白）都收起菜单
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (!$('#settings').hidden && e.key === 'Escape') {
+          closeSettings();
+          return;
+        }
+        if ($('#reader').hidden) return;
+        if (e.target.closest('input, textarea, select')) return;
+        if (e.key === 'ArrowRight' || e.key === 'PageDown') state.adapter && state.adapter.next();
+        else if (e.key === 'ArrowLeft' || e.key === 'PageUp') state.adapter && state.adapter.prev();
+        else if (e.key === 'Escape') {
+          closePopover();
+          hideBubble();
+          setPanel(null);
+        }
+      });
+
+      window.addEventListener('resize', () => {
+        closePopover();
+        hideBubble();
+        // 窗口尺寸变了要重新量，否则 epub 的容器会与可视区错位
+        if (state.adapter && state.adapter.relayout) state.adapter.relayout();
+      });
+
+      // 把页面里的意外错误也报上来，否则"什么都没发生"这类问题没法排查
+      window.addEventListener('error', (e) => {
+        // epub.js 调整尺寸时会报这个，属于无害告警，不往诊断里刷
+        if (/ResizeObserver loop/i.test(String(e.message || ''))) return;
+        diag('window-error', { message: e.message, source: e.filename, line: e.lineno, col: e.colno });
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        const reason = e.reason;
+        diag('unhandled-rejection', { reason: (reason && reason.message) || String(reason) });
+      });
+
+      renderDepsStatus();
+      applyAppearance();
+      refreshBooks()
+        .catch((err) => {
+          console.error(err);
+          $('#book-grid').innerHTML = '<div class="empty">打开本地数据库失败：' + esc(err.message) + '</div>';
+        })
+        .finally(() => {
+          diag('boot', {
+            pdf: deps.pdfBase,
+            epub: deps.epubUrl,
+            jszip: deps.jszipUrl,
+            failures: deps.failures,
+            books: state.books.length,
+            online: navigator.onLine,
+          });
+        });
+
+      /** 自检：把书架里每本书解析一遍并把结果上报（只在 URL 带 ?diag=1 时运行） */
+      async function runBookSelfTest() {
+        let books = [];
+        try {
+          books = await dbAll('books');
+        } catch (err) {
+          diag('selftest-start-failed', { message: (err && err.message) || String(err) });
+          return;
+        }
+        diag('selftest-start', {
+          count: books.length,
+          epubGlobal: typeof window.ePub,
+          jszipGlobal: typeof window.JSZip,
+          pdfVersion: pdfjsLib && pdfjsLib.version,
+        });
+        for (const b of books) {
+          const out = { id: b.id, format: b.format, title: b.title, size: b.size };
+          try {
+            const blob = await dbGet('files', b.id);
+            out.blobSize = blob ? blob.size : null;
+            out.blobType = blob ? String(blob.type || '') : null;
+            if (!blob) throw new Error('书架里有记录，但取不到文件');
+
+            if (b.format === 'pdf') {
+              const sub = await blob.arrayBuffer();
+              out.header = Array.from(new Uint8Array(sub.slice(0, 5)))
+                .map((c) => c.toString(16).padStart(2, '0'))
+                .join(' ');
+              const doc = await pdfjsLib.getDocument({ data: sub, isEvalSupported: false }).promise;
+              out.pages = doc.numPages;
+              await doc.destroy();
+              out.ok = true;
+            } else {
+              const buf = await blob.arrayBuffer();
+              out.bytes = buf.byteLength;
+              // ZIP/EPUB 的文件头是 50 4b 03 04（PK..），不是的话说明它根本不是 zip
+              out.header = Array.from(new Uint8Array(buf.slice(0, 5)))
+                .map((c) => c.toString(16).padStart(2, '0'))
+                .join(' ');
+              let lastErr = '';
+              for (const input of [buf, new Blob([buf], { type: 'application/epub+zip' })]) {
+                try {
+                  const bk = window.ePub(input);
+                  await bk.ready;
+                  out.ok = true;
+                  out.parsedTitle = (bk.packaging && bk.packaging.metadata && bk.packaging.metadata.title) || '';
+                  out.spine = bk.spine ? bk.spine.length : null;
+                  try {
+                    bk.destroy();
+                  } catch {
+                    /* 忽略 */
+                  }
+                  break;
+                } catch (err) {
+                  lastErr += ((err && err.message) || String(err)) + ' / ';
+                }
+              }
+              if (!out.ok) out.error = lastErr;
+            }
+          } catch (err) {
+            out.ok = false;
+            out.error = (err && err.message) || String(err);
+          }
+          diag('selftest-book', out);
+        }
+        diag('selftest-done', {});
+      }
+
+      if (/[?&]diag=1/.test(location.search)) runBookSelfTest();
+
+      // ?ui=1 检查外观/气泡这些交互控件是否接好（返回可读的状态快照）
+      if (/[?&]ui=1/.test(location.search)) {
+        setTimeout(() => {
+          const host = $('#stage').firstElementChild;
+          try {
+            showPopover({
+              text: 'translation',
+              context: 'Here is a translation example for the popover.',
+              rect: new DOMRect(240, 240, 120, 20),
+              location: { bookId: 'test', format: 'epub', percent: 0 },
+            });
+          } catch (err) {
+            diag('ui-check', { popoverError: (err && err.message) || String(err) });
+          }
+          const pop = $('#popover');
+          const rootStyle = getComputedStyle(document.documentElement);
+          diag('ui-check', {
+            popoverButtons: Array.from(pop.querySelectorAll('[data-act]')).map((b) => b.textContent),
+            hlSwatches: pop.querySelectorAll('[data-pick-hl]').length,
+            translatedUpfront: document.getElementById('pop-zh') ? !document.getElementById('pop-zh').hidden : null,
+            sideOrder: Array.from($('#reader-body').children).map((el) => el.id || el.className),
+            sideWidthVar: rootStyle.getPropertyValue('--side-w').trim(),
+            readerBg: rootStyle.getPropertyValue('--reader-bg').trim(),
+            selColor: rootStyle.getPropertyValue('--sel').trim(),
+            hlColor: state.hlColor,
+            wheelMode: state.wheelMode,
+            contentWidth: state.contentWidth,
+            hostClass: host ? host.className : null,
+            hostWidth: host ? host.style.width || '(auto)' : null,
+            lookFont: $('#look-font').textContent,
+            lookWidth: $('#look-width').textContent,
+            wheelMode: state.wheelMode,
+            lineHeight: state.lineHeight,
+            selMenu: state.selMenu,
+            biMode: state.biMode,
+            adapterDebug: state.adapter && state.adapter.debug ? state.adapter.debug() : null,
+            lookRows: Array.from(document.querySelectorAll('#look .look-row')).map((r) =>
+              r.querySelector('.look-label') ? r.querySelector('.look-label').textContent : '?',
+            ),
+            hlFillSample: hlFill('#ffd666'),
+            panelOpen: !$('#side').hidden,
+            panelTab: state.panel,
+            pageValue: $('#page-input').value,
+            pageTotal: $('#page-total').textContent,
+            colors: (() => {
+              const out = {};
+              try {
+                out.stage = getComputedStyle($('#stage')).backgroundColor;
+                const cont = host && host.querySelector('.epub-container');
+                out.container = cont ? getComputedStyle(cont).backgroundColor : null;
+                out.host = host ? getComputedStyle(host).backgroundColor : null;
+                const f = host && host.querySelector('iframe');
+                const d = f && f.contentDocument;
+                out.iframeBody = d && d.body ? getComputedStyle(d.body).backgroundColor : null;
+                out.iframeHtml = d && d.documentElement ? getComputedStyle(d.documentElement).backgroundColor : null;
+              } catch (err) {
+                out.error = String(err);
+              }
+              return out;
+            })(),
+            hostScrollable: host ? host.scrollHeight - host.clientHeight : null,
+            layout: (() => {
+              const rows = [];
+              const push = (el, name) => {
+                if (!el) return;
+                const cs = getComputedStyle(el);
+                rows.push({
+                  name,
+                  clientH: el.clientHeight,
+                  scrollH: el.scrollHeight,
+                  overflowY: cs.overflowY,
+                  height: cs.height,
+                  position: cs.position,
+                  border: cs.borderTopWidth + '/' + cs.borderBottomWidth,
+                  shadow: cs.boxShadow === 'none' ? '-' : 'yes',
+                });
+              };
+              const hostEl = $('#stage') ? $('#stage').firstElementChild : null;
+              push($('#stage'), 'stage');
+              push(hostEl, 'host');
+              push(hostEl && hostEl.querySelector('.epub-container'), 'container');
+              push(hostEl && hostEl.querySelector('.epub-view'), 'view');
+              const fr = hostEl && hostEl.querySelector('iframe');
+              push(fr, 'iframe');
+              if (fr && fr.contentDocument) push(fr.contentDocument.documentElement, 'iframe-html');
+              return rows;
+            })(),
+            views: host ? host.querySelectorAll('.epub-view').length : 0,
+            bodyHeight: (() => {
+              try {
+                const f = host && host.querySelector('iframe');
+                return f && f.contentDocument ? f.contentDocument.body.scrollHeight : null;
+              } catch {
+                return null;
+              }
+            })(),
+            domTree: (() => {
+              const out = [];
+              const walk = (el, depth) => {
+                if (!el || depth > 3 || out.length > 14) return;
+                let cs = null;
+                try {
+                  cs = getComputedStyle(el);
+                } catch {
+                  /* ignore */
+                }
+                out.push({
+                  d: depth,
+                  tag: el.tagName.toLowerCase(),
+                  cls: String(el.className || '').slice(0, 32),
+                  clientH: el.clientHeight,
+                  scrollH: el.scrollHeight,
+                  ovY: cs ? cs.overflowY : null,
+                  h: el.style ? el.style.height : '',
+                });
+                if (el.tagName === 'IFRAME') return;
+                for (const child of el.children) walk(child, depth + 1);
+              };
+              walk(host, 0);
+              return out;
+            })(),
+          });
+          closePopover();
+        }, 7000);
+      }
+
+      // ?ui=2 用合成事件模拟真实操作：Ctrl+滚轮调栏宽 / 滚轮翻页 / 拖动侧栏
+      // ?ui=3 验证：滚动内容时进度/页码是否实时更新（滚动体验的核心）
+      if (/[?&]ui=3/.test(location.search)) {
+        setTimeout(async () => {
+          const host = $('#stage').firstElementChild;
+          const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+          const container =
+            host && (host.querySelector('.epub-container') || host.querySelector('.pdf-host') || host);
+          const before = await state.adapter.currentLocation();
+          if (container) container.scrollTop = 700;
+          await wait(1200);
+          const after = await state.adapter.currentLocation();
+          diag('ui-check3', {
+            beforePercent: before.percent,
+            afterPercent: after.percent,
+            beforePage: before.pageNo,
+            afterPage: after.pageNo,
+            containerScroll: container
+              ? { top: container.scrollTop, clientH: container.clientHeight, scrollH: container.scrollHeight }
+              : null,
+            tracked: Math.abs((after.percent || 0) - (before.percent || 0)) > 0.005,
+          });
+          if (container) container.scrollTop = 0;
+        }, 6000);
+      }
+
+      if (/[?&]ui=2/.test(location.search)) {
+        setTimeout(async () => {
+          const stage = $('#stage');
+          const host = stage.firstElementChild;
+          const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+          const frame = host ? host.querySelector('iframe') : null;
+          const fireWheel = (opts) => {
+            // 每次都重新查 iframe：epub.js 排版时会替换 iframe，旧引用是失效的
+            const live = host ? host.querySelector('iframe') : null;
+            const win = live && live.contentWindow ? live.contentWindow : null;
+            const Ctor = (win && win.WheelEvent) || window.WheelEvent;
+            const evt = new Ctor('wheel', Object.assign({ bubbles: true, cancelable: true }, opts));
+            // PDF 的滚动容器是 host（stage 的子元素），事件不会向下传，所以直接打在 host 上
+            (win || host || stage).dispatchEvent(evt);
+          };
+
+          const iframes = host ? host.querySelectorAll('iframe').length : 0;
+          const stageKids = Array.from(stage.children).map((el) => el.className + '#' + el.id);
+          const allIframes = document.querySelectorAll('iframe').length;
+          let frameParent = null;
+          try {
+            const f = document.querySelector('iframe');
+            frameParent = f && f.parentElement ? f.parentElement.className : null;
+          } catch {
+            /* ignore */
+          }
+          const stats = state.adapter && state.adapter.bilingualStats ? state.adapter.bilingualStats() : null;
+
+          const widthBefore = state.contentWidth;
+          fireWheel({ deltaY: 120, ctrlKey: true });
+          await wait(300);
+          const widthAfter = state.contentWidth;
+
+          setWheelMode('page');
+          await wait(1200); // 切到分页会触发重新排版，等它稳定再模拟滚轮
+          const locBefore = state.book && state.book.location ? state.book.location.cfi || state.book.location.page : null;
+          fireWheel({ deltaY: 120 });
+          await wait(1500);
+          const locAfter = state.book && state.book.location ? state.book.location.cfi || state.book.location.page : null;
+          const statsAfter = state.adapter && state.adapter.bilingualStats ? state.adapter.bilingualStats() : null;
+          const adapterDebug = state.adapter && state.adapter.debug ? state.adapter.debug() : null;
+
+          // 页码跳转（顶部输入页码回车走的就是这条路径）
+          let jump = null;
+          try {
+            if (state.adapter && state.adapter.goToPage && state.adapter.currentLocation) {
+              const locBackup = state.book && state.book.location ? Object.assign({}, state.book.location) : null;
+              const before = await state.adapter.currentLocation();
+              const target = before.pageTotal ? Math.max(1, Math.round(before.pageTotal * 0.6)) : 50;
+              await state.adapter.goToPage(target);
+              await wait(1500);
+              const after = await state.adapter.currentLocation();
+              jump = {
+                target,
+                beforePage: before.pageNo,
+                afterPage: after.pageNo,
+                beforePercent: before.percent,
+                afterPercent: after.percent,
+                total: before.pageTotal,
+                moved: Math.abs((after.percent || 0) - (before.percent || 0)) > 0.05,
+              };
+              // 测完回到原来的位置，别把用户的阅读进度顶掉
+              if (locBackup && state.adapter.goTo) await state.adapter.goTo(locBackup);
+            }
+          } catch (err) {
+            jump = { error: (err && err.message) || String(err) };
+          }
+
+          const splitter = $('#splitter');
+          const sideBefore = state.sideWidth;
+          const box = $('#reader-body').getBoundingClientRect();
+          const mk = (type, x) => new PointerEvent(type, { pointerId: 7, clientX: x, bubbles: true, cancelable: true });
+          splitter.dispatchEvent(mk('pointerdown', box.left + 340));
+          splitter.dispatchEvent(mk('pointermove', box.left + 520));
+          splitter.dispatchEvent(mk('pointerup', box.left + 520));
+          await wait(200);
+
+          diag('ui-check2', {
+            widthBefore,
+            widthAfter,
+            ctrlWheelChanged: widthAfter !== widthBefore,
+            hostWidth: host ? host.style.width || '(auto)' : null,
+            locBefore,
+            locAfter,
+            wheelFlipped: !!locAfter && locAfter !== locBefore,
+            iframes,
+            allIframes,
+            stageKids,
+            frameParent,
+            stats,
+            statsAfter,
+            adapterDebug,
+            jump,
+            sideVar: getComputedStyle(document.documentElement).getPropertyValue('--side-w').trim(),
+            sideHidden: $('#side').hidden,
+            splitterHidden: splitter.hidden,
+          });
+          setWheelMode('scroll'); // 测完还原，别留下副作用
+          state.sideWidth = sideBefore;
+          localStorage.setItem('reader.side', String(sideBefore));
+          state.contentWidth = widthBefore;
+          localStorage.setItem('reader.width', String(widthBefore));
+          applyAppearance();
+        }, 5000);
+      }
+
+      // ?open=<bookId> 自动打开某本书并上报渲染结果，用来验证「打开 → 渲染」整条链路
+      const autoOpen = location.search.match(/[?&]open=([A-Za-z0-9_-]+)/);
+      if (autoOpen) {
+        openBook(autoOpen[1])
+          .then(() => {
+            const adapterAtOpen = state.adapter; // 绑定到这次打开的适配器，避免用户操作把状态换掉
+            const biParam = location.search.match(/[?&]bi=(off|hover|always)/);
+            if (biParam) applyBiMode(biParam[1]);
+            const gotoParam = location.search.match(/[?&]goto=(\d+)/);
+            if (gotoParam && state.adapter && state.adapter.goToPage) {
+              state.adapter.goToPage(parseInt(gotoParam[1], 10));
+            }
+            // ?ocr=<页> 直接对某页跑一次 OCR 并把结果回报给诊断通道
+            const ocrParam = location.search.match(/[?&]ocr=(\d+)/);
+            if (ocrParam && state.adapter && state.adapter.ocrPage) {
+              const page = parseInt(ocrParam[1], 10);
+              const t0 = Date.now();
+              const adapterRef = state.adapter; // 绑定调用时的适配器，避免中途切书影响观测
+              adapterRef
+                .ocrPage(page, state.ocrLang, (m) => {
+                  state.ocrStatus = ocrStatusText(m.status) + (m.progress ? ' ' + Math.round(m.progress * 100) + '%' : '');
+                })
+                .then((words) => {
+                  const docInfo = {
+                    words: words.words.length,
+                    paragraphs: words.paragraphs.length,
+                    conf: Math.round(words.conf || 0),
+                  };
+                  // 程序化验证：OCR 出来的文本层能不能被选中
+                  let selectionProbe = null;
+                  let spanCount = 0;
+                  try {
+                    const pageEl = $('#stage').querySelector('.pdf-page[data-page="' + page + '"]');
+                    const spans = pageEl ? pageEl.querySelectorAll('.text-layer span') : [];
+                    spanCount = spans.length;
+                    if (spans.length > 1) {
+                      const range = document.createRange();
+                      range.setStartBefore(spans[0]);
+                      range.setEndAfter(spans[1]);
+                      const sel = window.getSelection();
+                      sel.removeAllRanges();
+                      sel.addRange(range);
+                      selectionProbe = String(sel).slice(0, 60);
+                      sel.removeAllRanges();
+                    }
+                  } catch (err) {
+                    selectionProbe = 'error: ' + ((err && err.message) || String(err));
+                  }
+                  diag('ocr-check', {
+                    page,
+                    langs: state.ocrLang,
+                    ms: Date.now() - t0,
+                    words: docInfo.words,
+                    paragraphs: docInfo.paragraphs,
+                    conf: docInfo.conf,
+                    sample: words.words.slice(0, 12).map((w) => w.t).join(' '),
+                    firstPara: words.paragraphs[0] ? words.paragraphs[0].text.slice(0, 140) : null,
+                    box: words[0] ? { x: +words[0].x.toFixed(3), y: +words[0].y.toFixed(3), w: +words[0].w.toFixed(3) } : null,
+                    currentPage: adapterRef.getCurrentParagraphs ? adapterRef.getCurrentParagraphs().page : null,
+                    pageParagraphs: adapterRef.getCurrentParagraphs
+                      ? adapterRef.getCurrentParagraphs().items.length
+                      : null,
+                    firstParagraph: adapterRef.getCurrentParagraphs && adapterRef.getCurrentParagraphs().items[0]
+                      ? adapterRef.getCurrentParagraphs().items[0].text.slice(0, 120)
+                      : null,
+                    bilingual: adapterRef.bilingualStats ? adapterRef.bilingualStats() : null,
+                    textStats: adapterRef.textStats ? adapterRef.textStats() : null,
+                    spanCount,
+                    selectionProbe,
+                  });
+                })
+                .catch((err) => diag('ocr-check', { page, ok: false, ms: Date.now() - t0, message: (err && err.message) || String(err) }));
+            }
+            const errBox = $('#stage').querySelector('.error-box');
+            diag('auto-open', {
+              bookId: autoOpen[1],
+              ok: !errBox,
+              message: errBox ? errBox.textContent.slice(0, 400) : 'ok',
+              hasCanvas: !!$('#stage').querySelector('canvas'),
+              hasIframe: !!$('#stage').querySelector('iframe'),
+              paragraphs: state.paragraphs.length,
+              toc: state.toc.length,
+              percent: state.book ? state.book.percent : null,
+            });
+            setTimeout(() => {
+              let xlate = 0;
+              let xlateOk = 0;
+              try {
+                const doc = $('#stage').querySelector('iframe')?.contentDocument;
+                if (doc) {
+                  xlate = doc.querySelectorAll('.xlate').length;
+                  xlateOk = doc.querySelectorAll('.xlate[data-state="ok"]').length;
+                }
+              } catch {
+                /* 拿不到 iframe 就算了 */
+              }
+              diag('auto-open-later', {
+                bookId: autoOpen[1],
+                adapterFormat: adapterAtOpen ? adapterAtOpen.format : null,
+                stillActive: state.adapter === adapterAtOpen,
+                paragraphs: state.paragraphs.length,
+                paraPage: state.paraPage,
+                firstPara: state.paragraphs[0] ? state.paragraphs[0].text.slice(0, 160) : null,
+                xlate,
+                xlateOk,
+                biMode: state.biMode,
+                provider: settings.provider,
+                adapterStats:
+                  adapterAtOpen && adapterAtOpen.bilingualStats ? adapterAtOpen.bilingualStats() : null,
+              });
+            }, 9000);
+          })
+          .catch((err) => diag('auto-open', { bookId: autoOpen[1], ok: false, message: String(err && err.message) }));
+      }
+
+      window.reader = { state, settings, translate, PROVIDERS, deps, runBookSelfTest };
+    </script>
+  </body>
+</html>
