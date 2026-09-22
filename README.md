@@ -138,6 +138,71 @@ node test-paragraphs.mjs   # 用合成数据验证 PDF 的段落合并规则
 `test-paragraphs.mjs` 从 `index.html` 里把 `extractParagraphs` 抽出来，用模拟的 pdf.js
 文本项测单栏 / 双栏 / 缩进 / 页码等排版情况——这段是启发式规则，改坏了不报错，只会让对照变乱。
 
+### 附带：Codex 桌面端界面语言诊断
+
+```bash
+node check-codex-ui-lang.mjs
+```
+
+用来判断 Codex 桌面端「界面主体」为什么不是中文。它检查本地 `localeOverride`、
+statsig 功能开关 `enable_i18n` 的初始化情况、以及应用服务端请求的状态分布，并给出判定与下一步。
+
+结论（来自应用自身代码与日志）：界面多语言由服务端灰度开关 `enable_i18n` 控制，客户端默认 `false`；
+开关数据源 `https://ab.chatgpt.com/v1/initialize` 失败时，界面固定为内置英文，
+本地 `[desktop].localeOverride` 只是偏好、会被忽略。顶部原生菜单不受这个开关影响（跟随系统语言）。
+
+### 附带：把 Codex 数据/运行时目录迁到 D 盘
+
+```bash
+node migrate-codex-data.mjs            # 预演：只打印将要做的事，不改任何文件
+node migrate-codex-data.mjs --apply    # 执行（必须先完全退出 Codex）
+```
+
+用**目录联接（junction）**把 7 个「数据 / 运行时」目录实际搬到 `D:\tools\codex\`，原路径保留为联接：
+路径不变、`config.toml` 不变、环境变量不变（不使用 `CODEX_HOME`），程序无感。
+
+| 原路径（保持可用） | 实际搬到 | 体积 |
+| --- | --- | --- |
+| `~\.codex\.sandbox-bin` | `D:\tools\codex\sandbox-bin` | 310 MB |
+| `~\.codex\.tmp` | `D:\tools\codex\tmp` | 105 MB |
+| `~\.codex\.sandbox` | `D:\tools\codex\sandbox` | 3 MB |
+| `%APPDATA%\Codex` | `D:\tools\codex\appdata-Codex` | 169 MB |
+| `%LOCALAPPDATA%\Codex` | `D:\tools\codex\localappdata-Codex` | 6 MB |
+| `~\.codex\skills` | `D:\tools\codex\skills` | 0.4 MB |
+| `~\.codex\plugins` | `D:\tools\codex\plugins` | 1 MB |
+
+程序本体（`%LOCALAPPDATA%\OpenAI\Codex`，637 MB）与状态库（`config.toml`、`sessions`、`plans`、`*.sqlite`）原地不动。
+回滚：`node migrate-codex-data.mjs --revert <名字> --apply`，或 `--revert-all --apply`。
+
+应用更新时若把某个目录重建为真实目录（替换掉联接），D: 上的副本会变成孤儿；脚本在预演时会报告这种情况，
+提示先删除 D: 上的旧副本再重跑迁移。
+
+### 金丝雀测试：判定 MSIX 打包应用的那两份 AppData 哪份是活的
+
+Codex 是 MSIX 打包应用，同一份数据会有两份：真实路径 `%APPDATA%\Codex`（以及 `%LOCALAPPDATA%\Codex`）
+与虚拟化副本 `%LOCALAPPDATA%\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\{Roaming\Codex,Local\Codex}`。
+脚本默认**不迁移、不删除**它们，只在预演时报告两份的文件数、体积与最近改动时间。
+
+要确定哪份是活数据，做一次可完全回退的金丝雀测试：
+
+1. 完全退出 Codex；
+2. 把 `%APPDATA%\Codex` 改名为 `%APPDATA%\Codex.bak-<日期>`（同卷改名，秒级完成）；
+3. 启动 Codex，正常用几分钟：改一次设置、发一条消息、看会话列表；
+4. **一切正常** → 说明应用用的是 `Packages\...\LocalCache` 那份，旧目录是死数据，可直接删除回收空间；
+5. **出现异常**（设置/登录态丢失、侧栏空白等）→ 关掉 Codex，把 `Codex.bak-<日期>` 改回 `Codex`，零损失；
+   同时这也证明真实路径才是活数据，改用它作为迁移目标：`node migrate-codex-data.mjs --include-msix --apply`。
+
+`%LOCALAPPDATA%\Codex`（6 MB）可对同样步骤处理，收益很小，可选。
+
+安全性细节：
+
+- **默认预演**，只有 `--apply` 才动手；每个目录都是「复制 → 校验文件数与字节数 → 原路径改名 `.__migrating` → 建联接 → 复核 → 删暂存」，建联接失败会自动还原。
+- 上次中断若留下 `*.__migrating` / `*.__reverting` 残留，脚本会在预演时列出、并在 `--apply` 时先清理它们（释放 C: 空间）。
+- 删暂存失败（文件被占用）不会中断迁移——联接已经生效，脚本只提示稍后清理。
+- 若进程检查**查不到结果**（例如在 Codex 自己的终端里运行，进程查询被限制），执行模式会**拒绝运行**；请在 Windows Terminal / PowerShell 中运行，确认已退出时可用 `--force` 跳过该检查。
+- 若 `USERPROFILE` / `APPDATA` / `LOCALAPPDATA` 为空（沙箱终端常见），执行模式同样**拒绝运行**并打印这三个解析值——否则会把真实目录误判成"不存在"而静默跳过。
+- 联接指向的比较会忽略尾部反斜杠、`\\?\` 前缀与大小写（Windows 读出的联接常带尾斜杠），避免误报"校验失败"。
+
 ### 本地服务器与诊断
 
 ```bash
